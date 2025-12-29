@@ -114,7 +114,7 @@ export function CenterPanel({
             value={modelName}
             onChange={(e) => onModelNameChange(e.target.value)}
             className="w-48"
-            placeholder={provider === "gemini" ? "gemini-2.0-flash" : provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o"}
+            placeholder={provider === "gemini" ? "gemini-3-flash-preview" : provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o"}
           />
         </div>
         <div className="flex items-center gap-2">

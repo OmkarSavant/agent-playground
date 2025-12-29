@@ -341,6 +341,12 @@ export default function Home() {
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-4 pr-4">
+              <div className="rounded-md border bg-muted/50 p-3">
+                <p className="text-sm text-muted-foreground">
+                  Contact <span className="font-medium text-foreground">Omkar Savant</span> (osavant@) with any questions/suggestions.
+                </p>
+              </div>
+
               <div>
                 <h3 className="font-semibold">Available Services</h3>
                 <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
@@ -367,11 +373,12 @@ export default function Home() {
               <div>
                 <h3 className="font-semibold">Supported Providers</h3>
                 <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
-                  <li><span className="font-medium text-foreground">Gemini</span>: gemini-2.0-flash, gemini-1.5-pro, etc.</li>
+                  <li><span className="font-medium text-foreground">Gemini</span>: gemini-3-flash-preview, gemini-2.0-flash, etc.</li>
                   <li><span className="font-medium text-foreground">Anthropic</span>: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, etc.</li>
                   <li><span className="font-medium text-foreground">OpenAI</span>: gpt-4o, gpt-4-turbo, o1-preview, etc.</li>
                 </ul>
               </div>
+
             </div>
           </ScrollArea>
         </DialogContent>

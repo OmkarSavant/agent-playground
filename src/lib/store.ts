@@ -46,7 +46,7 @@ export interface PlaygroundState {
 
 export const defaultState: PlaygroundState = {
   provider: "gemini",
-  modelName: "gemini-2.0-flash",
+  modelName: "gemini-3-flash-preview",
   apiKey: "",
   taskId: "b0a8eae_1",
   enabledServices: services.map((s) => s.name),
