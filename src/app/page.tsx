@@ -100,7 +100,7 @@ export default function Home() {
 
       addTraceEntry("text", "World state initialized successfully.");
 
-      // Now get passwords to populate system prompt
+      // Get passwords to populate system prompt
       if (data.cookie) {
         const passwordsResponse = await fetch("/api/appworld", {
           method: "POST",
@@ -108,15 +108,14 @@ export default function Home() {
           body: JSON.stringify({
             action: "execute",
             task_id: state.taskId,
-            code: "print(apis.supervisor.show_passwords())",
+            code: "print(apis.supervisor.show_account_passwords())",
             cookie: data.cookie,
           }),
         });
 
         const passwordsData = await passwordsResponse.json();
 
-        if (passwordsData.output) {
-          // Update system prompt with credentials
+        if (passwordsData.output && !passwordsData.output.includes("Exception")) {
           const credentialsSection = `\n\n## Available Credentials\n${passwordsData.output}`;
           const updatedPrompt = defaultAgentPreset.systemPrompt + credentialsSection;
           updateState({ systemPrompt: updatedPrompt });
@@ -245,7 +244,7 @@ export default function Home() {
     await handleInitialize();
   };
 
-  // Load world context
+  // Load world context - gets profile info from supervisor
   const handleLoadWorldContext = async () => {
     if (!state.isInitialized || !state.gaesaCookie) return;
 
@@ -267,7 +266,9 @@ export default function Home() {
 
       setState((prev) => ({
         ...prev,
-        worldContext: data.output || "No profile data available",
+        worldContext: data.output && !data.output.includes("Exception")
+          ? data.output
+          : "Could not load profile. Use supervisor_show_profile tool to explore.",
         isLoadingWorldContext: false,
       }));
     } catch (error) {

@@ -115,16 +115,16 @@ export interface Service {
 
 export const baseTools: ServiceFunction[] = [
   {
-    name: "supervisor_show_passwords",
+    name: "supervisor_show_account_passwords",
     description:
-      "Show all login credentials (usernames and passwords) for the current user across all services. Call this first to get authentication details.",
+      "Show all login credentials (usernames and passwords) for the current user across all services. Returns a list of {account_name, password} objects. Call this first to get authentication details.",
     schema: z.object({}),
-    toCode: () => `print(apis.supervisor.show_passwords())`,
+    toCode: () => `print(apis.supervisor.show_account_passwords())`,
   },
   {
     name: "supervisor_show_profile",
     description:
-      "Show the profile information of the current user including name, email, and other personal details.",
+      "Show the profile information of the current supervisor/user including name, email, and other personal details.",
     schema: z.object({}),
     toCode: () => `print(apis.supervisor.show_profile())`,
   },
@@ -134,6 +134,15 @@ export const baseTools: ServiceFunction[] = [
       "Mark the current task as complete. Call this when you have finished the assigned task.",
     schema: z.object({}),
     toCode: () => `print(apis.supervisor.complete_task())`,
+  },
+  {
+    name: "execute_python",
+    description:
+      "Execute arbitrary Python code to interact with the AppWorld APIs. Use this for any API call not covered by specific tools. The 'apis' object is available with all service modules.",
+    schema: z.object({
+      code: z.string().describe("Python code to execute. Must use print() to output results."),
+    }),
+    toCode: (args) => args.code,
   },
 ];
 
@@ -1308,13 +1317,15 @@ export const defaultAgentPreset = {
   name: "General Agent",
   description: "Full access to all tools",
   enabledServices: services.map((s) => s.name),
-  systemPrompt: `You are an AI assistant with access to various services and APIs. Your goal is to help the user complete tasks by using the available tools.
+  systemPrompt: `You are an AI assistant with access to various services and APIs in a simulated environment. Your goal is to help the user complete tasks by using the available tools.
+
+Available services: Spotify, Gmail, Venmo, Amazon, Todoist, SimpleNote, Splitwise, Phone, File System.
 
 When you need to perform actions:
-1. First, call supervisor_show_passwords to get login credentials for services you need
+1. Use supervisor_show_account_passwords to get login credentials for services
 2. Login to the required services using the credentials
-3. Perform the requested actions using the appropriate API calls
+3. Use the appropriate service tools to interact with APIs
 4. When finished, call supervisor_complete_task
 
-Always explain what you're doing and why. If you encounter errors, try to recover or explain what went wrong.`,
+Always explain what you're doing and why. If you encounter errors, try alternative approaches or explain what went wrong.`,
 };
