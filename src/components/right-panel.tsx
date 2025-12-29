@@ -108,24 +108,24 @@ export function RightPanel({
         <h2 className="mb-2 text-base font-semibold">Agent Trace Log (Live)</h2>
         <div className="grid grid-cols-4 gap-1 text-xs">
           <div className="flex flex-col rounded bg-muted/50 px-2 py-1">
-            <span className="text-muted-foreground text-[10px]">Input</span>
+            <span className="text-muted-foreground text-[10px]">Input Tokens</span>
             <span className="font-mono">{tokenUsage.inputTokens.toLocaleString()}</span>
           </div>
           <div className="flex flex-col rounded bg-muted/50 px-2 py-1">
-            <span className="text-muted-foreground text-[10px]">Output</span>
+            <span className="text-muted-foreground text-[10px]">Output Tokens</span>
             <span className="font-mono">{tokenUsage.outputTokens.toLocaleString()}</span>
           </div>
           <div className="flex flex-col rounded bg-muted/50 px-2 py-1">
-            <span className="text-muted-foreground text-[10px]">Thinking</span>
+            <span className="text-muted-foreground text-[10px]">Thinking Tokens</span>
             <span className="font-mono">{tokenUsage.thinkingTokens.toLocaleString()}</span>
           </div>
           <div className="flex flex-col rounded bg-muted/50 px-2 py-1">
-            <span className="text-muted-foreground text-[10px]">Tools</span>
+            <span className="text-muted-foreground text-[10px]">Tool Calls</span>
             <span className="font-mono">{tokenUsage.toolCalls}</span>
           </div>
         </div>
         <div className="mt-1 flex justify-between rounded bg-primary/10 px-2 py-1 text-xs">
-          <span className="text-muted-foreground">Total:</span>
+          <span className="text-muted-foreground">Total Tokens:</span>
           <span className="font-mono font-semibold">{totalTokens.toLocaleString()}</span>
         </div>
       </div>
