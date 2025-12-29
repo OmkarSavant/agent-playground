@@ -13,7 +13,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { services } from "@/lib/services";
+import { ModelProvider } from "@/lib/store";
 import {
   Play,
   Square,
@@ -25,6 +33,8 @@ import {
 } from "lucide-react";
 
 interface CenterPanelProps {
+  provider: ModelProvider;
+  onProviderChange: (provider: ModelProvider) => void;
   modelName: string;
   onModelNameChange: (name: string) => void;
   apiKey: string;
@@ -48,6 +58,8 @@ interface CenterPanelProps {
 }
 
 export function CenterPanel({
+  provider,
+  onProviderChange,
   modelName,
   onModelNameChange,
   apiKey,
@@ -81,6 +93,19 @@ export function CenterPanel({
       {/* Header */}
       <div className="flex items-center gap-4 border-b bg-card p-4">
         <div className="flex items-center gap-2">
+          <Label className="whitespace-nowrap">Provider</Label>
+          <Select value={provider} onValueChange={(v) => onProviderChange(v as ModelProvider)}>
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="gemini">Gemini</SelectItem>
+              <SelectItem value="anthropic">Anthropic</SelectItem>
+              <SelectItem value="openai">OpenAI</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
           <Label htmlFor="model" className="whitespace-nowrap">
             Model
           </Label>
@@ -89,7 +114,7 @@ export function CenterPanel({
             value={modelName}
             onChange={(e) => onModelNameChange(e.target.value)}
             className="w-48"
-            placeholder="gemini-3-flash"
+            placeholder={provider === "gemini" ? "gemini-2.0-flash" : provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o"}
           />
         </div>
         <div className="flex items-center gap-2">

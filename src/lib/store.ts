@@ -18,8 +18,11 @@ export interface TokenUsage {
   toolCalls: number;
 }
 
+export type ModelProvider = "gemini" | "anthropic" | "openai";
+
 export interface PlaygroundState {
   // Configuration
+  provider: ModelProvider;
   modelName: string;
   apiKey: string;
   taskId: string;
@@ -42,6 +45,7 @@ export interface PlaygroundState {
 }
 
 export const defaultState: PlaygroundState = {
+  provider: "gemini",
   modelName: "gemini-2.0-flash",
   apiKey: "",
   taskId: "b0a8eae_1",
@@ -64,6 +68,7 @@ export const defaultState: PlaygroundState = {
 
 // Local storage keys
 const STORAGE_KEYS = {
+  PROVIDER: "appworld_provider",
   API_KEY: "appworld_api_key",
   MODEL_NAME: "appworld_model_name",
   TASK_ID: "appworld_task_id",
@@ -76,6 +81,10 @@ export function loadPersistedState(): Partial<PlaygroundState> {
   if (typeof window === "undefined") return {};
 
   try {
+    const providerStr = localStorage.getItem(STORAGE_KEYS.PROVIDER);
+    const provider: ModelProvider = (providerStr === "gemini" || providerStr === "anthropic" || providerStr === "openai")
+      ? providerStr
+      : defaultState.provider;
     const apiKey = localStorage.getItem(STORAGE_KEYS.API_KEY) || "";
     const modelName = localStorage.getItem(STORAGE_KEYS.MODEL_NAME) || defaultState.modelName;
     const taskId = localStorage.getItem(STORAGE_KEYS.TASK_ID) || defaultState.taskId;
@@ -86,6 +95,7 @@ export function loadPersistedState(): Partial<PlaygroundState> {
     const systemPrompt = localStorage.getItem(STORAGE_KEYS.SYSTEM_PROMPT) || defaultState.systemPrompt;
 
     return {
+      provider,
       apiKey,
       modelName,
       taskId,
@@ -102,6 +112,9 @@ export function persistState(state: Partial<PlaygroundState>) {
   if (typeof window === "undefined") return;
 
   try {
+    if (state.provider !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.PROVIDER, state.provider);
+    }
     if (state.apiKey !== undefined) {
       localStorage.setItem(STORAGE_KEYS.API_KEY, state.apiKey);
     }

@@ -145,6 +145,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
           "x-api-key": state.apiKey,
+          "x-model-provider": state.provider,
           "x-model-name": state.modelName,
           "x-enabled-services": state.enabledServices.join(","),
         },
@@ -298,6 +299,8 @@ export default function Home() {
       />
 
       <CenterPanel
+        provider={state.provider}
+        onProviderChange={(provider) => updateState({ provider })}
         modelName={state.modelName}
         onModelNameChange={(name) => updateState({ modelName: name })}
         apiKey={state.apiKey}
@@ -352,7 +355,8 @@ export default function Home() {
               <div>
                 <h3 className="font-semibold">How to Use</h3>
                 <ol className="mt-2 list-decimal space-y-1 pl-4 text-sm text-muted-foreground">
-                  <li>Enter your API key for the model provider (Gemini, Anthropic, or OpenAI)</li>
+                  <li>Select a provider (Gemini, Anthropic, or OpenAI) and enter your API key</li>
+                  <li>Enter the model name (e.g., gemini-2.0-flash, claude-sonnet-4-20250514, gpt-4o)</li>
                   <li>Select which services the agent can access</li>
                   <li>Click &quot;Initialize State&quot; to set up the world</li>
                   <li>Enter a task in the User Prompt</li>
@@ -361,14 +365,11 @@ export default function Home() {
               </div>
 
               <div>
-                <h3 className="font-semibold">Model Support</h3>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  The playground auto-detects the provider from the model name:
-                </p>
+                <h3 className="font-semibold">Supported Providers</h3>
                 <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
-                  <li><span className="font-mono">gemini-*</span> → Google Gemini</li>
-                  <li><span className="font-mono">claude-*</span> → Anthropic Claude</li>
-                  <li><span className="font-mono">gpt-*, o1-*</span> → OpenAI</li>
+                  <li><span className="font-medium text-foreground">Gemini</span>: gemini-2.0-flash, gemini-1.5-pro, etc.</li>
+                  <li><span className="font-medium text-foreground">Anthropic</span>: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, etc.</li>
+                  <li><span className="font-medium text-foreground">OpenAI</span>: gpt-4o, gpt-4-turbo, o1-preview, etc.</li>
                 </ul>
               </div>
             </div>

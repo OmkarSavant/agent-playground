@@ -27,7 +27,7 @@ import {
 import { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
-type ModelProvider = "gemini" | "anthropic" | "openai";
+import { ModelProvider } from "@/lib/store";
 
 interface ChatRequest {
   messages: Array<{
@@ -69,60 +69,59 @@ interface AgentLoopResult {
   needsUserInput: boolean; // Did agent ask a question?
 }
 
-// Detect provider from model name
-function detectProvider(modelName: string): ModelProvider {
-  const name = modelName.toLowerCase();
-  if (
-    name.includes("gemini") ||
-    name.includes("gemma") ||
-    name.startsWith("models/")
-  ) {
-    return "gemini";
+// Validate provider from header
+function validateProvider(providerHeader: string | null): ModelProvider {
+  if (providerHeader === "gemini" || providerHeader === "anthropic" || providerHeader === "openai") {
+    return providerHeader;
   }
-  if (
-    name.includes("claude") ||
-    name.includes("anthropic") ||
-    name.startsWith("claude-")
-  ) {
-    return "anthropic";
-  }
-  // Default to OpenAI for gpt-*, o1-*, etc.
-  return "openai";
+  // Default to gemini if not specified
+  return "gemini";
 }
 
 // Execute a tool call via AppWorld API
 async function executeToolCall(
   toolCall: ToolCall,
   taskId: string,
-  cookie: string
+  cookie: string,
+  baseUrl: string
 ): Promise<string> {
   const fn = getFunctionByName(toolCall.name);
   if (!fn) {
+    console.error(`[Tool Error] Unknown function: ${toolCall.name}`);
     return `Error: Unknown function "${toolCall.name}"`;
   }
 
   // Generate Python code
   const code = fn.toCode(toolCall.args);
+  console.log(`[Tool Call] ${toolCall.name}`, { args: toolCall.args, code });
 
   // Call AppWorld execute API
   try {
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/appworld`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "execute",
-          task_id: taskId,
-          code,
-          cookie,
-        }),
-      }
-    );
+    const url = `${baseUrl}/api/appworld`;
+    console.log(`[Tool Fetch] POST ${url}`);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "execute",
+        task_id: taskId,
+        code,
+        cookie,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Tool Error] HTTP ${response.status}: ${errorText}`);
+      return `Error: HTTP ${response.status} - ${errorText}`;
+    }
 
     const data = await response.json();
+    console.log(`[Tool Result] ${toolCall.name}`, { output: data.output?.substring(0, 200) });
 
     if (data.error) {
+      console.error(`[Tool Error] ${toolCall.name}:`, data.error, data.details);
       return `Error: ${data.error}${data.details ? ` - ${data.details}` : ""}`;
     }
 
@@ -135,7 +134,10 @@ async function executeToolCall(
 
     return data.output || "No output";
   } catch (error) {
-    return `Error executing tool: ${error instanceof Error ? error.message : "Unknown error"}`;
+    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : "";
+    console.error(`[Tool Error] ${toolCall.name} fetch failed:`, errorMsg, errorStack);
+    return `Error executing tool: ${errorMsg}`;
   }
 }
 
@@ -148,6 +150,7 @@ async function runGeminiLoop(
   functions: ServiceFunction[],
   taskId: string,
   cookie: string,
+  baseUrl: string,
   maxIterations: number = 50
 ): Promise<AgentLoopResult> {
   const trace: TraceEntry[] = [];
@@ -220,7 +223,8 @@ async function runGeminiLoop(
       const result = await executeToolCall(
         { id: `call_${i}_${toolCallCount}`, name: tc.name, args: tc.args },
         taskId,
-        cookie
+        cookie,
+        baseUrl
       );
 
       trace.push({
@@ -267,6 +271,7 @@ async function runAnthropicLoop(
   functions: ServiceFunction[],
   taskId: string,
   cookie: string,
+  baseUrl: string,
   maxIterations: number = 50
 ): Promise<AgentLoopResult> {
   const trace: TraceEntry[] = [];
@@ -342,7 +347,8 @@ async function runAnthropicLoop(
       const result = await executeToolCall(
         { id: tc.id, name: tc.name, args: tc.args },
         taskId,
-        cookie
+        cookie,
+        baseUrl
       );
 
       trace.push({
@@ -388,6 +394,7 @@ async function runOpenAILoop(
   functions: ServiceFunction[],
   taskId: string,
   cookie: string,
+  baseUrl: string,
   maxIterations: number = 50
 ): Promise<AgentLoopResult> {
   const trace: TraceEntry[] = [];
@@ -458,7 +465,8 @@ async function runOpenAILoop(
       const result = await executeToolCall(
         { id: tc.id, name: tc.name, args: tc.args },
         taskId,
-        cookie
+        cookie,
+        baseUrl
       );
 
       trace.push({
@@ -492,6 +500,12 @@ async function runOpenAILoop(
 
 export async function POST(request: NextRequest) {
   try {
+    // Determine base URL from request
+    const protocol = request.headers.get("x-forwarded-proto") || "http";
+    const host = request.headers.get("host") || "localhost:3000";
+    const baseUrl = `${protocol}://${host}`;
+    console.log(`[Chat API] Using base URL: ${baseUrl}`);
+
     // Get headers
     const providerHeader = request.headers.get("x-model-provider");
     const apiKey = request.headers.get("x-api-key");
@@ -517,10 +531,8 @@ export async function POST(request: NextRequest) {
           "file_system",
         ];
 
-    // Detect provider
-    const provider: ModelProvider = providerHeader
-      ? (providerHeader as ModelProvider)
-      : detectProvider(modelName);
+    // Get provider from header
+    const provider = validateProvider(providerHeader);
 
     // Get enabled functions
     const functions = getEnabledFunctions(enabledServices);
@@ -581,7 +593,8 @@ export async function POST(request: NextRequest) {
         geminiMessages,
         functions,
         taskId,
-        cookie
+        cookie,
+        baseUrl
       );
     } else if (provider === "anthropic") {
       // Convert messages to Anthropic format
@@ -630,7 +643,8 @@ export async function POST(request: NextRequest) {
         anthropicMessages,
         functions,
         taskId,
-        cookie
+        cookie,
+        baseUrl
       );
     } else {
       // OpenAI
@@ -673,7 +687,8 @@ export async function POST(request: NextRequest) {
         openaiMessages,
         functions,
         taskId,
-        cookie
+        cookie,
+        baseUrl
       );
     }
 

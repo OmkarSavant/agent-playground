@@ -106,7 +106,7 @@ export async function callGemini(
 
   const geminiResponse: GeminiResponse = {
     inputTokens: promptTokens,
-    outputTokens: candidateTokens - thoughtsTokens, // Output tokens exclude thinking
+    outputTokens: candidateTokens, // Total output tokens (may include thinking in some API versions)
     thinkingTokens: thoughtsTokens,
     finishReason: candidate.finishReason,
     modelParts: [], // Will store all parts for recirculation

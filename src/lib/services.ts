@@ -92,6 +92,28 @@ function formatPythonArg(value: any): string {
   return String(value);
 }
 
+// Helper to generate authenticated API call code
+// This logs in, captures the access_token, and calls the API in one block
+function makeAuthenticatedCall(
+  service: string,
+  apiMethod: string,
+  username: string,
+  password: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  extraArgs?: Record<string, any>
+): string {
+  const argsStr = extraArgs
+    ? Object.entries(extraArgs)
+        .map(([k, v]) => `${k}=${formatPythonArg(v)}`)
+        .join(", ")
+    : "";
+  const apiArgs = argsStr ? `access_token=access_token, ${argsStr}` : "access_token=access_token";
+
+  return `login_result = apis.${service}.login(username=${formatPythonArg(username)}, password=${formatPythonArg(password)})
+access_token = login_result["access_token"]
+print(apis.${service}.${apiMethod}(${apiArgs}))`;
+}
+
 // Service function definition
 export interface ServiceFunction {
   name: string;
@@ -110,7 +132,7 @@ export interface Service {
 }
 
 // ============================================================================
-// BASE TOOLS (always available)
+// BASE TOOLS (supervisor tools - always available to model)
 // ============================================================================
 
 export const baseTools: ServiceFunction[] = [
@@ -135,16 +157,18 @@ export const baseTools: ServiceFunction[] = [
     schema: z.object({}),
     toCode: () => `print(apis.supervisor.complete_task())`,
   },
-  {
-    name: "execute_python",
-    description:
-      "Execute arbitrary Python code to interact with the AppWorld APIs. Use this for any API call not covered by specific tools. The 'apis' object is available with all service modules.",
-    schema: z.object({
-      code: z.string().describe("Python code to execute. Must use print() to output results."),
-    }),
-    toCode: (args) => args.code,
-  },
 ];
+
+// Internal tool for executing raw Python - NOT exposed to the model
+// Used internally when we need to run custom code
+export const executePythonTool: ServiceFunction = {
+  name: "execute_python",
+  description: "Execute arbitrary Python code (internal use only)",
+  schema: z.object({
+    code: z.string().describe("Python code to execute"),
+  }),
+  toCode: (args) => args.code,
+};
 
 // ============================================================================
 // SPOTIFY SERVICE
@@ -153,49 +177,97 @@ export const baseTools: ServiceFunction[] = [
 const spotifyFunctions: ServiceFunction[] = [
   {
     name: "spotify_login",
-    description: "Login to Spotify with username and password.",
+    description: "Login to Spotify with username and password. Returns access_token for authenticated calls.",
     schema: z.object({
-      username: z.string().describe("Spotify username"),
+      username: z.string().describe("Spotify username (email)"),
       password: z.string().describe("Spotify password"),
     }),
     toCode: (args) =>
       `print(apis.spotify.login(username=${formatPythonArg(args.username)}, password=${formatPythonArg(args.password)}))`,
   },
   {
-    name: "spotify_show_account",
-    description: "Show the current Spotify account details.",
-    schema: z.object({}),
-    toCode: () => `print(apis.spotify.show_account())`,
+    name: "spotify_show_liked_songs",
+    description: "Get a list of songs you have liked. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("Spotify username (email)"),
+      password: z.string().describe("Spotify password"),
+    }),
+    toCode: (args) => makeAuthenticatedCall("spotify", "show_liked_songs", args.username, args.password),
   },
   {
-    name: "spotify_search_song",
-    description: "Search for songs on Spotify.",
+    name: "spotify_show_account",
+    description: "Show the current Spotify account details. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("Spotify username (email)"),
+      password: z.string().describe("Spotify password"),
+    }),
+    toCode: (args) => makeAuthenticatedCall("spotify", "show_account", args.username, args.password),
+  },
+  {
+    name: "spotify_search_songs",
+    description: "Search for songs on Spotify. Does not require authentication.",
     schema: z.object({
       query: z.string().describe("Search query for songs"),
     }),
     toCode: (args) =>
-      `print(apis.spotify.search_song(query=${formatPythonArg(args.query)}))`,
+      `print(apis.spotify.search_songs(query=${formatPythonArg(args.query)}))`,
   },
   {
-    name: "spotify_search_artist",
-    description: "Search for artists on Spotify.",
+    name: "spotify_search_artists",
+    description: "Search for artists on Spotify. Does not require authentication.",
     schema: z.object({
       query: z.string().describe("Search query for artists"),
     }),
     toCode: (args) =>
-      `print(apis.spotify.search_artist(query=${formatPythonArg(args.query)}))`,
+      `print(apis.spotify.search_artists(query=${formatPythonArg(args.query)}))`,
   },
   {
-    name: "spotify_search_album",
-    description: "Search for albums on Spotify.",
+    name: "spotify_search_albums",
+    description: "Search for albums on Spotify. Does not require authentication.",
     schema: z.object({
       query: z.string().describe("Search query for albums"),
     }),
     toCode: (args) =>
-      `print(apis.spotify.search_album(query=${formatPythonArg(args.query)}))`,
+      `print(apis.spotify.search_albums(query=${formatPythonArg(args.query)}))`,
   },
   {
-    name: "spotify_get_song",
+    name: "spotify_search_playlists",
+    description: "Search for playlists on Spotify. Does not require authentication.",
+    schema: z.object({
+      query: z.string().describe("Search query for playlists"),
+    }),
+    toCode: (args) =>
+      `print(apis.spotify.search_playlists(query=${formatPythonArg(args.query)}))`,
+  },
+  {
+    name: "spotify_show_playlist",
+    description: "Show details of a playlist including its songs.",
+    schema: z.object({
+      playlist_id: z.number().describe("Playlist ID"),
+    }),
+    toCode: (args) =>
+      `print(apis.spotify.show_playlist(playlist_id=${formatPythonArg(args.playlist_id)}))`,
+  },
+  {
+    name: "spotify_play_music",
+    description: "Play a song, album, or playlist on Spotify. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("Spotify username (email)"),
+      password: z.string().describe("Spotify password"),
+      song_id: z.number().optional().describe("Song ID to play"),
+      album_id: z.number().optional().describe("Album ID to play"),
+      playlist_id: z.number().optional().describe("Playlist ID to play"),
+    }),
+    toCode: (args) => {
+      const extraArgs: Record<string, unknown> = {};
+      if (args.song_id) extraArgs.song_id = args.song_id;
+      if (args.album_id) extraArgs.album_id = args.album_id;
+      if (args.playlist_id) extraArgs.playlist_id = args.playlist_id;
+      return makeAuthenticatedCall("spotify", "play_music", args.username, args.password, extraArgs);
+    },
+  },
+  {
+    name: "spotify_show_song",
     description: "Get details of a specific song by ID.",
     schema: z.object({
       song_id: z.string().describe("The ID of the song"),
@@ -213,95 +285,13 @@ const spotifyFunctions: ServiceFunction[] = [
       `print(apis.spotify.get_album(album_id=${formatPythonArg(args.album_id)}))`,
   },
   {
-    name: "spotify_get_artist",
+    name: "spotify_show_artist",
     description: "Get details of a specific artist by ID.",
     schema: z.object({
-      artist_id: z.string().describe("The ID of the artist"),
+      artist_id: z.number().describe("The ID of the artist"),
     }),
     toCode: (args) =>
-      `print(apis.spotify.get_artist(artist_id=${formatPythonArg(args.artist_id)}))`,
-  },
-  {
-    name: "spotify_show_liked_songs",
-    description: "Show all liked/saved songs.",
-    schema: z.object({}),
-    toCode: () => `print(apis.spotify.show_liked_songs())`,
-  },
-  {
-    name: "spotify_like_song",
-    description: "Like/save a song.",
-    schema: z.object({
-      song_id: z.string().describe("The ID of the song to like"),
-    }),
-    toCode: (args) =>
-      `print(apis.spotify.like_song(song_id=${formatPythonArg(args.song_id)}))`,
-  },
-  {
-    name: "spotify_unlike_song",
-    description: "Remove a song from liked songs.",
-    schema: z.object({
-      song_id: z.string().describe("The ID of the song to unlike"),
-    }),
-    toCode: (args) =>
-      `print(apis.spotify.unlike_song(song_id=${formatPythonArg(args.song_id)}))`,
-  },
-  {
-    name: "spotify_show_playlists",
-    description: "Show all user playlists.",
-    schema: z.object({}),
-    toCode: () => `print(apis.spotify.show_playlists())`,
-  },
-  {
-    name: "spotify_get_playlist",
-    description: "Get details of a specific playlist.",
-    schema: z.object({
-      playlist_id: z.string().describe("The ID of the playlist"),
-    }),
-    toCode: (args) =>
-      `print(apis.spotify.get_playlist(playlist_id=${formatPythonArg(args.playlist_id)}))`,
-  },
-  {
-    name: "spotify_create_playlist",
-    description: "Create a new playlist.",
-    schema: z.object({
-      name: z.string().describe("Name of the playlist"),
-      description: z.string().optional().describe("Description of the playlist"),
-    }),
-    toCode: (args) => {
-      const descArg = args.description
-        ? `, description=${formatPythonArg(args.description)}`
-        : "";
-      return `print(apis.spotify.create_playlist(name=${formatPythonArg(args.name)}${descArg}))`;
-    },
-  },
-  {
-    name: "spotify_add_to_playlist",
-    description: "Add a song to a playlist.",
-    schema: z.object({
-      playlist_id: z.string().describe("The ID of the playlist"),
-      song_id: z.string().describe("The ID of the song to add"),
-    }),
-    toCode: (args) =>
-      `print(apis.spotify.add_to_playlist(playlist_id=${formatPythonArg(args.playlist_id)}, song_id=${formatPythonArg(args.song_id)}))`,
-  },
-  {
-    name: "spotify_remove_from_playlist",
-    description: "Remove a song from a playlist.",
-    schema: z.object({
-      playlist_id: z.string().describe("The ID of the playlist"),
-      song_id: z.string().describe("The ID of the song to remove"),
-    }),
-    toCode: (args) =>
-      `print(apis.spotify.remove_from_playlist(playlist_id=${formatPythonArg(args.playlist_id)}, song_id=${formatPythonArg(args.song_id)}))`,
-  },
-  {
-    name: "spotify_delete_playlist",
-    description: "Delete a playlist.",
-    schema: z.object({
-      playlist_id: z.string().describe("The ID of the playlist to delete"),
-    }),
-    toCode: (args) =>
-      `print(apis.spotify.delete_playlist(playlist_id=${formatPythonArg(args.playlist_id)}))`,
+      `print(apis.spotify.show_artist(artist_id=${formatPythonArg(args.artist_id)}))`,
   },
 ];
 
@@ -312,129 +302,94 @@ const spotifyFunctions: ServiceFunction[] = [
 const gmailFunctions: ServiceFunction[] = [
   {
     name: "gmail_login",
-    description: "Login to Gmail with email and password.",
+    description: "Login to Gmail with username (email) and password. Returns access_token.",
     schema: z.object({
-      email: z.string().describe("Gmail email address"),
+      username: z.string().describe("Gmail username (email address)"),
       password: z.string().describe("Gmail password"),
     }),
     toCode: (args) =>
-      `print(apis.gmail.login(email=${formatPythonArg(args.email)}, password=${formatPythonArg(args.password)}))`,
+      `print(apis.gmail.login(username=${formatPythonArg(args.username)}, password=${formatPythonArg(args.password)}))`,
   },
   {
-    name: "gmail_show_account",
-    description: "Show the current Gmail account details.",
-    schema: z.object({}),
-    toCode: () => `print(apis.gmail.show_account())`,
-  },
-  {
-    name: "gmail_list_threads",
-    description: "List email threads in the inbox.",
+    name: "gmail_show_inbox_threads",
+    description: "Show email threads in the inbox. Requires authentication.",
     schema: z.object({
-      folder: z
-        .enum(["inbox", "sent", "drafts", "trash", "spam"])
-        .optional()
-        .describe("Email folder to list"),
-      max_results: z.number().optional().describe("Maximum number of threads to return"),
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
     }),
-    toCode: (args) => {
-      const params: string[] = [];
-      if (args.folder) params.push(`folder=${formatPythonArg(args.folder)}`);
-      if (args.max_results) params.push(`max_results=${args.max_results}`);
-      return `print(apis.gmail.list_threads(${params.join(", ")}))`;
-    },
+    toCode: (args) => makeAuthenticatedCall("gmail", "show_inbox_threads", args.username, args.password),
   },
   {
-    name: "gmail_get_thread",
-    description: "Get a specific email thread by ID.",
+    name: "gmail_show_outbox_threads",
+    description: "Show sent email threads. Requires authentication.",
     schema: z.object({
-      thread_id: z.string().describe("The ID of the email thread"),
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
+    }),
+    toCode: (args) => makeAuthenticatedCall("gmail", "show_outbox_threads", args.username, args.password),
+  },
+  {
+    name: "gmail_show_thread",
+    description: "Get a specific email thread by ID. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
+      thread_id: z.number().describe("The ID of the email thread"),
     }),
     toCode: (args) =>
-      `print(apis.gmail.get_thread(thread_id=${formatPythonArg(args.thread_id)}))`,
+      makeAuthenticatedCall("gmail", "show_thread", args.username, args.password, { thread_id: args.thread_id }),
   },
   {
-    name: "gmail_search",
-    description: "Search emails by query.",
+    name: "gmail_show_email",
+    description: "Get a specific email by ID. Requires authentication.",
     schema: z.object({
-      query: z.string().describe("Search query"),
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
+      email_id: z.number().describe("The ID of the email"),
     }),
     toCode: (args) =>
-      `print(apis.gmail.search(query=${formatPythonArg(args.query)}))`,
+      makeAuthenticatedCall("gmail", "show_email", args.username, args.password, { email_id: args.email_id }),
   },
   {
     name: "gmail_send_email",
-    description: "Send a new email.",
+    description: "Send a new email. Requires authentication.",
     schema: z.object({
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject"),
       body: z.string().describe("Email body content"),
-      cc: z.string().optional().describe("CC recipients (comma-separated)"),
-      bcc: z.string().optional().describe("BCC recipients (comma-separated)"),
     }),
-    toCode: (args) => {
-      const params = [
-        `to=${formatPythonArg(args.to)}`,
-        `subject=${formatPythonArg(args.subject)}`,
-        `body=${formatPythonArg(args.body)}`,
-      ];
-      if (args.cc) params.push(`cc=${formatPythonArg(args.cc)}`);
-      if (args.bcc) params.push(`bcc=${formatPythonArg(args.bcc)}`);
-      return `print(apis.gmail.send_email(${params.join(", ")}))`;
-    },
+    toCode: (args) =>
+      makeAuthenticatedCall("gmail", "send_email", args.username, args.password, {
+        to: args.to,
+        subject: args.subject,
+        body: args.body,
+      }),
   },
   {
-    name: "gmail_reply",
-    description: "Reply to an email thread.",
+    name: "gmail_reply_to_email",
+    description: "Reply to an email. Requires authentication.",
     schema: z.object({
-      thread_id: z.string().describe("The ID of the thread to reply to"),
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
+      email_id: z.number().describe("The ID of the email to reply to"),
       body: z.string().describe("Reply body content"),
     }),
     toCode: (args) =>
-      `print(apis.gmail.reply(thread_id=${formatPythonArg(args.thread_id)}, body=${formatPythonArg(args.body)}))`,
+      makeAuthenticatedCall("gmail", "reply_to_email", args.username, args.password, {
+        email_id: args.email_id,
+        body: args.body,
+      }),
   },
   {
-    name: "gmail_forward",
-    description: "Forward an email.",
+    name: "gmail_show_account",
+    description: "Show Gmail account details. Requires authentication.",
     schema: z.object({
-      thread_id: z.string().describe("The ID of the thread to forward"),
-      to: z.string().describe("Recipient email address"),
-      body: z.string().optional().describe("Additional message to include"),
+      username: z.string().describe("Gmail username (email)"),
+      password: z.string().describe("Gmail password"),
     }),
-    toCode: (args) => {
-      const params = [
-        `thread_id=${formatPythonArg(args.thread_id)}`,
-        `to=${formatPythonArg(args.to)}`,
-      ];
-      if (args.body) params.push(`body=${formatPythonArg(args.body)}`);
-      return `print(apis.gmail.forward(${params.join(", ")}))`;
-    },
-  },
-  {
-    name: "gmail_delete_thread",
-    description: "Delete an email thread (move to trash).",
-    schema: z.object({
-      thread_id: z.string().describe("The ID of the thread to delete"),
-    }),
-    toCode: (args) =>
-      `print(apis.gmail.delete_thread(thread_id=${formatPythonArg(args.thread_id)}))`,
-  },
-  {
-    name: "gmail_mark_as_read",
-    description: "Mark an email thread as read.",
-    schema: z.object({
-      thread_id: z.string().describe("The ID of the thread"),
-    }),
-    toCode: (args) =>
-      `print(apis.gmail.mark_as_read(thread_id=${formatPythonArg(args.thread_id)}))`,
-  },
-  {
-    name: "gmail_mark_as_unread",
-    description: "Mark an email thread as unread.",
-    schema: z.object({
-      thread_id: z.string().describe("The ID of the thread"),
-    }),
-    toCode: (args) =>
-      `print(apis.gmail.mark_as_unread(thread_id=${formatPythonArg(args.thread_id)}))`,
+    toCode: (args) => makeAuthenticatedCall("gmail", "show_account", args.username, args.password),
   },
 ];
 
@@ -810,85 +765,60 @@ const todoistFunctions: ServiceFunction[] = [
 const simpleNoteFunctions: ServiceFunction[] = [
   {
     name: "simplenote_login",
-    description: "Login to SimpleNote with email and password.",
+    description: "Login to SimpleNote with username (email) and password. Returns access_token.",
     schema: z.object({
-      email: z.string().describe("SimpleNote email address"),
+      username: z.string().describe("SimpleNote username (email address)"),
       password: z.string().describe("SimpleNote password"),
     }),
     toCode: (args) =>
-      `print(apis.simple_note.login(email=${formatPythonArg(args.email)}, password=${formatPythonArg(args.password)}))`,
+      `print(apis.simple_note.login(username=${formatPythonArg(args.username)}, password=${formatPythonArg(args.password)}))`,
   },
   {
-    name: "simplenote_show_account",
-    description: "Show the current SimpleNote account details.",
-    schema: z.object({}),
-    toCode: () => `print(apis.simple_note.show_account())`,
-  },
-  {
-    name: "simplenote_list_notes",
-    description: "List all notes.",
+    name: "simplenote_search_notes",
+    description: "Search notes by query. Requires authentication.",
     schema: z.object({
-      tag: z.string().optional().describe("Filter by tag"),
-    }),
-    toCode: (args) => {
-      const params = args.tag ? `tag=${formatPythonArg(args.tag)}` : "";
-      return `print(apis.simple_note.list_notes(${params}))`;
-    },
-  },
-  {
-    name: "simplenote_get_note",
-    description: "Get a specific note by ID.",
-    schema: z.object({
-      note_id: z.string().describe("The ID of the note"),
-    }),
-    toCode: (args) =>
-      `print(apis.simple_note.get_note(note_id=${formatPythonArg(args.note_id)}))`,
-  },
-  {
-    name: "simplenote_create_note",
-    description: "Create a new note.",
-    schema: z.object({
-      content: z.string().describe("Note content"),
-      tags: z.array(z.string()).optional().describe("Tags for the note"),
-    }),
-    toCode: (args) => {
-      const params = [`content=${formatPythonArg(args.content)}`];
-      if (args.tags) params.push(`tags=${formatPythonArg(args.tags)}`);
-      return `print(apis.simple_note.create_note(${params.join(", ")}))`;
-    },
-  },
-  {
-    name: "simplenote_update_note",
-    description: "Update an existing note.",
-    schema: z.object({
-      note_id: z.string().describe("The ID of the note to update"),
-      content: z.string().optional().describe("New content"),
-      tags: z.array(z.string()).optional().describe("New tags"),
-    }),
-    toCode: (args) => {
-      const params = [`note_id=${formatPythonArg(args.note_id)}`];
-      if (args.content) params.push(`content=${formatPythonArg(args.content)}`);
-      if (args.tags) params.push(`tags=${formatPythonArg(args.tags)}`);
-      return `print(apis.simple_note.update_note(${params.join(", ")}))`;
-    },
-  },
-  {
-    name: "simplenote_delete_note",
-    description: "Delete a note.",
-    schema: z.object({
-      note_id: z.string().describe("The ID of the note to delete"),
-    }),
-    toCode: (args) =>
-      `print(apis.simple_note.delete_note(note_id=${formatPythonArg(args.note_id)}))`,
-  },
-  {
-    name: "simplenote_search",
-    description: "Search notes by query.",
-    schema: z.object({
+      username: z.string().describe("SimpleNote username (email)"),
+      password: z.string().describe("SimpleNote password"),
       query: z.string().describe("Search query"),
     }),
     toCode: (args) =>
-      `print(apis.simple_note.search(query=${formatPythonArg(args.query)}))`,
+      makeAuthenticatedCall("simple_note", "search_notes", args.username, args.password, { query: args.query }),
+  },
+  {
+    name: "simplenote_show_note",
+    description: "Get a specific note by ID. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("SimpleNote username (email)"),
+      password: z.string().describe("SimpleNote password"),
+      note_id: z.number().describe("The ID of the note"),
+    }),
+    toCode: (args) =>
+      makeAuthenticatedCall("simple_note", "show_note", args.username, args.password, { note_id: args.note_id }),
+  },
+  {
+    name: "simplenote_create_note",
+    description: "Create a new note. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("SimpleNote username (email)"),
+      password: z.string().describe("SimpleNote password"),
+      title: z.string().describe("Note title"),
+      content: z.string().describe("Note content"),
+    }),
+    toCode: (args) =>
+      makeAuthenticatedCall("simple_note", "create_note", args.username, args.password, {
+        title: args.title,
+        content: args.content,
+      }),
+  },
+  {
+    name: "simplenote_show_account",
+    description: "Show SimpleNote account details. Requires authentication.",
+    schema: z.object({
+      username: z.string().describe("SimpleNote username (email)"),
+      password: z.string().describe("SimpleNote password"),
+    }),
+    toCode: (args) =>
+      makeAuthenticatedCall("simple_note", "show_account", args.username, args.password),
   },
 ];
 
@@ -1284,11 +1214,14 @@ export function getEnabledFunctions(enabledServices: string[]): ServiceFunction[
   return functions;
 }
 
-// Get function by name
+// Get function by name (includes internal execute_python for backwards compatibility)
 export function getFunctionByName(name: string): ServiceFunction | undefined {
   // Check base tools
   const baseTool = baseTools.find((t) => t.name === name);
   if (baseTool) return baseTool;
+
+  // Check internal execute_python tool (not exposed to model but can be called)
+  if (name === "execute_python") return executePythonTool;
 
   // Check service functions
   for (const service of services) {
