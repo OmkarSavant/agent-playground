@@ -1,0 +1,128 @@
+// Client-side state management for the playground
+import { services, defaultAgentPreset } from "./services";
+
+export interface TraceEntry {
+  id: string;
+  timestamp: Date;
+  type: "tool_call" | "tool_result" | "text" | "user_input" | "error";
+  content: string;
+  name?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  args?: Record<string, any>;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  toolCalls: number;
+}
+
+export interface PlaygroundState {
+  // Configuration
+  modelName: string;
+  apiKey: string;
+  taskId: string;
+  enabledServices: string[];
+  systemPrompt: string;
+
+  // Session state
+  gaesaCookie: string | null;
+  isInitialized: boolean;
+  isRunning: boolean;
+  shouldStop: boolean;
+
+  // Trace
+  trace: TraceEntry[];
+  tokenUsage: TokenUsage;
+
+  // World context (lazy loaded)
+  worldContext: string | null;
+  isLoadingWorldContext: boolean;
+}
+
+export const defaultState: PlaygroundState = {
+  modelName: "gemini-2.0-flash",
+  apiKey: "",
+  taskId: "b0a8eae_1",
+  enabledServices: services.map((s) => s.name),
+  systemPrompt: defaultAgentPreset.systemPrompt,
+  gaesaCookie: null,
+  isInitialized: false,
+  isRunning: false,
+  shouldStop: false,
+  trace: [],
+  tokenUsage: {
+    inputTokens: 0,
+    outputTokens: 0,
+    thinkingTokens: 0,
+    toolCalls: 0,
+  },
+  worldContext: null,
+  isLoadingWorldContext: false,
+};
+
+// Local storage keys
+const STORAGE_KEYS = {
+  API_KEY: "appworld_api_key",
+  MODEL_NAME: "appworld_model_name",
+  TASK_ID: "appworld_task_id",
+  ENABLED_SERVICES: "appworld_enabled_services",
+  SYSTEM_PROMPT: "appworld_system_prompt",
+} as const;
+
+// Load persisted state from localStorage
+export function loadPersistedState(): Partial<PlaygroundState> {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const apiKey = localStorage.getItem(STORAGE_KEYS.API_KEY) || "";
+    const modelName = localStorage.getItem(STORAGE_KEYS.MODEL_NAME) || defaultState.modelName;
+    const taskId = localStorage.getItem(STORAGE_KEYS.TASK_ID) || defaultState.taskId;
+    const enabledServicesJson = localStorage.getItem(STORAGE_KEYS.ENABLED_SERVICES);
+    const enabledServices = enabledServicesJson
+      ? JSON.parse(enabledServicesJson)
+      : defaultState.enabledServices;
+    const systemPrompt = localStorage.getItem(STORAGE_KEYS.SYSTEM_PROMPT) || defaultState.systemPrompt;
+
+    return {
+      apiKey,
+      modelName,
+      taskId,
+      enabledServices,
+      systemPrompt,
+    };
+  } catch {
+    return {};
+  }
+}
+
+// Persist state to localStorage
+export function persistState(state: Partial<PlaygroundState>) {
+  if (typeof window === "undefined") return;
+
+  try {
+    if (state.apiKey !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.API_KEY, state.apiKey);
+    }
+    if (state.modelName !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.MODEL_NAME, state.modelName);
+    }
+    if (state.taskId !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.TASK_ID, state.taskId);
+    }
+    if (state.enabledServices !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.ENABLED_SERVICES, JSON.stringify(state.enabledServices));
+    }
+    if (state.systemPrompt !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.SYSTEM_PROMPT, state.systemPrompt);
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
+// Generate unique ID for trace entries
+export function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
