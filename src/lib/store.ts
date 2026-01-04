@@ -26,6 +26,19 @@ export interface ConversationMessage {
   toolResults?: Array<{ id: string; name: string; result: string }>;
 }
 
+export interface ServiceData {
+  name: string;
+  displayName: string;
+  data: Record<string, unknown>;
+  error?: string;
+}
+
+export interface WorldContext {
+  profile: Record<string, unknown> | null;
+  credentials: Array<{ account_name: string; password: string }> | null;
+  services: ServiceData[];
+}
+
 export type ModelProvider = "gemini" | "anthropic" | "openai";
 
 export interface PlaygroundState {
@@ -50,7 +63,7 @@ export interface PlaygroundState {
   conversationMessages: ConversationMessage[];
 
   // World context (lazy loaded)
-  worldContext: string | null;
+  worldContext: WorldContext | null;
   isLoadingWorldContext: boolean;
 }
 

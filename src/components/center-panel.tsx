@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { services } from "@/lib/services";
-import { ModelProvider } from "@/lib/store";
+import { ModelProvider, WorldContext } from "@/lib/store";
 import {
   Play,
   Square,
@@ -31,6 +31,55 @@ import {
   Loader2,
   Sparkles,
 } from "lucide-react";
+
+// Helper component for world context sections
+function WorldContextSection({
+  title,
+  children,
+  defaultOpen = false,
+  badge,
+  error,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  badge?: string;
+  error?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border bg-muted/50 px-3 py-2 hover:bg-muted/70">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{title}</span>
+          {badge && (
+            <Badge variant="secondary" className="text-xs">
+              {badge}
+            </Badge>
+          )}
+          {error && (
+            <Badge variant="red" className="text-xs">
+              Error
+            </Badge>
+          )}
+        </div>
+        {isOpen ? (
+          <ChevronDown className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1 rounded-md border bg-muted/30 p-3">
+        {error ? (
+          <div className="text-xs text-red-500">{error}</div>
+        ) : (
+          children
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 interface CenterPanelProps {
   provider: ModelProvider;
@@ -46,7 +95,7 @@ interface CenterPanelProps {
   onSystemPromptChange: (prompt: string) => void;
   userPrompt: string;
   onUserPromptChange: (prompt: string) => void;
-  worldContext: string | null;
+  worldContext: WorldContext | null;
   isLoadingWorldContext: boolean;
   onLoadWorldContext: () => void;
   isInitialized: boolean;
@@ -198,10 +247,56 @@ export function CenterPanel({
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-2">
               {worldContext ? (
-                <div className="rounded-md border bg-muted/50 p-3">
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs">
-                    {worldContext}
-                  </pre>
+                <div className="space-y-3">
+                  {/* User Profile */}
+                  {worldContext.profile && (
+                    <WorldContextSection title="User Profile" defaultOpen>
+                      <pre className="whitespace-pre-wrap text-xs">
+                        {JSON.stringify(worldContext.profile, null, 2)}
+                      </pre>
+                    </WorldContextSection>
+                  )}
+
+                  {/* Service Data */}
+                  {worldContext.services.map((service) => (
+                    <WorldContextSection
+                      key={service.name}
+                      title={service.displayName}
+                      badge={Object.keys(service.data).length > 0 ? undefined : "No data"}
+                      error={service.error}
+                    >
+                      {Object.entries(service.data).map(([key, value]) => (
+                        <div key={key} className="mb-2 last:mb-0">
+                          <div className="text-xs font-medium text-muted-foreground mb-1 capitalize">
+                            {key.replace(/([A-Z])/g, " $1").trim()}
+                          </div>
+                          <pre className="whitespace-pre-wrap text-xs bg-background/50 rounded p-2 max-h-32 overflow-auto">
+                            {typeof value === "string"
+                              ? value
+                              : JSON.stringify(value, null, 2)}
+                          </pre>
+                        </div>
+                      ))}
+                    </WorldContextSection>
+                  ))}
+
+                  {/* Reload button */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onLoadWorldContext}
+                    disabled={isLoadingWorldContext}
+                    className="w-full"
+                  >
+                    {isLoadingWorldContext ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Refreshing...
+                      </>
+                    ) : (
+                      "Refresh World State"
+                    )}
+                  </Button>
                 </div>
               ) : (
                 <Button

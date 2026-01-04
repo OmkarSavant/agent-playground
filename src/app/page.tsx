@@ -20,7 +20,7 @@ import {
   persistState,
   generateId,
 } from "@/lib/store";
-import { services, defaultAgentPreset, generateSystemPrompt } from "@/lib/services";
+import { services, generateSystemPrompt } from "@/lib/services";
 
 export default function Home() {
   const [state, setState] = useState<PlaygroundState>(defaultState);
@@ -330,39 +330,51 @@ export default function Home() {
     await handleInitialize();
   };
 
-  // Load world context - gets profile info from supervisor
+  // Load world context - gets comprehensive state from all enabled services
   const handleLoadWorldContext = async () => {
     if (!state.isInitialized || !state.gaesaCookie) return;
 
     setState((prev) => ({ ...prev, isLoadingWorldContext: true }));
 
     try {
-      const response = await fetch("/api/appworld", {
+      const response = await fetch("/api/world-context", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "execute",
-          task_id: state.taskId,
-          code: "print(apis.supervisor.show_profile())",
+          taskId: state.taskId,
           cookie: state.gaesaCookie,
+          enabledServices: state.enabledServices,
         }),
       });
 
       const data = await response.json();
 
+      if (data.error) {
+        setState((prev) => ({
+          ...prev,
+          worldContext: null,
+          isLoadingWorldContext: false,
+        }));
+        addTraceEntry("error", `Failed to load world context: ${data.error}`);
+        return;
+      }
+
       setState((prev) => ({
         ...prev,
-        worldContext: data.output && !data.output.includes("Exception")
-          ? data.output
-          : "Could not load profile. Use supervisor_show_profile tool to explore.",
+        worldContext: {
+          profile: data.profile,
+          credentials: data.credentials,
+          services: data.services,
+        },
         isLoadingWorldContext: false,
       }));
     } catch (error) {
       setState((prev) => ({
         ...prev,
-        worldContext: `Error loading: ${error instanceof Error ? error.message : "Unknown"}`,
+        worldContext: null,
         isLoadingWorldContext: false,
       }));
+      addTraceEntry("error", `Error loading world context: ${error instanceof Error ? error.message : "Unknown"}`);
     }
   };
 
