@@ -49,32 +49,46 @@ interface ToolCall {
   args: Record<string, any>;
 }
 
-interface TraceEntry {
-  type: "tool_call" | "tool_result" | "text" | "error";
-  content: string;
-  name?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  args?: Record<string, any>;
-  timestamp: string;
+// SSE Event types
+interface TraceEvent {
+  type: "trace";
+  entry: {
+    type: "tool_call" | "tool_result" | "text" | "error";
+    content: string;
+    name?: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    args?: Record<string, any>;
+    timestamp: string;
+  };
 }
 
-interface AgentLoopResult {
-  trace: TraceEntry[];
-  finalText?: string;
+interface TokenEvent {
+  type: "tokens";
   inputTokens: number;
   outputTokens: number;
   thinkingTokens: number;
   toolCallCount: number;
-  completed: boolean; // Did agent call supervisor_complete_task?
-  needsUserInput: boolean; // Did agent ask a question?
 }
+
+interface DoneEvent {
+  type: "done";
+  completed: boolean;
+  needsUserInput: boolean;
+}
+
+interface ErrorEvent {
+  type: "error";
+  error: string;
+  details?: string;
+}
+
+type SSEEvent = TraceEvent | TokenEvent | DoneEvent | ErrorEvent;
 
 // Validate provider from header
 function validateProvider(providerHeader: string | null): ModelProvider {
   if (providerHeader === "gemini" || providerHeader === "anthropic" || providerHeader === "openai") {
     return providerHeader;
   }
-  // Default to gemini if not specified
   return "gemini";
 }
 
@@ -91,11 +105,9 @@ async function executeToolCall(
     return `Error: Unknown function "${toolCall.name}"`;
   }
 
-  // Generate Python code
   const code = fn.toCode(toolCall.args);
   console.log(`[Tool Call] ${toolCall.name}`, { args: toolCall.args, code });
 
-  // Call AppWorld execute API
   try {
     const url = `${baseUrl}/api/appworld`;
     console.log(`[Tool Fetch] POST ${url}`);
@@ -125,7 +137,6 @@ async function executeToolCall(
       return `Error: ${data.error}${data.details ? ` - ${data.details}` : ""}`;
     }
 
-    // Return the parsed output or raw output
     if (data.parsed_output !== undefined) {
       return typeof data.parsed_output === "string"
         ? data.parsed_output
@@ -141,8 +152,13 @@ async function executeToolCall(
   }
 }
 
-// Run the agentic loop for Gemini (supports Gemini 3 thought recirculation)
-async function runGeminiLoop(
+// Helper to format SSE event
+function formatSSE(event: SSEEvent): string {
+  return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+// Streaming Gemini agent loop
+async function* runGeminiLoopStreaming(
   apiKey: string,
   modelName: string,
   systemPrompt: string,
@@ -152,15 +168,13 @@ async function runGeminiLoop(
   cookie: string,
   baseUrl: string,
   maxIterations: number = 50
-): Promise<AgentLoopResult> {
-  const trace: TraceEntry[] = [];
+): AsyncGenerator<SSEEvent> {
   const messages = [...initialMessages];
   let inputTokens = 0;
   let outputTokens = 0;
   let thinkingTokens = 0;
   let toolCallCount = 0;
   let completed = false;
-  let finalText: string | undefined;
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await callGemini(
@@ -175,46 +189,63 @@ async function runGeminiLoop(
     outputTokens += response.outputTokens;
     thinkingTokens += response.thinkingTokens;
 
+    // Emit token update
+    yield {
+      type: "tokens",
+      inputTokens,
+      outputTokens,
+      thinkingTokens,
+      toolCallCount,
+    };
+
     // Handle text response
     if (response.text) {
-      trace.push({
-        type: "text",
-        content: response.text,
-        timestamp: new Date().toISOString(),
-      });
-      finalText = response.text;
-    }
-
-    // No tool calls - agent is done or needs input
-    if (!response.toolCalls || response.toolCalls.length === 0) {
-      return {
-        trace,
-        finalText,
-        inputTokens,
-        outputTokens,
-        thinkingTokens,
-        toolCallCount,
-        completed,
-        needsUserInput: !!response.text,
+      yield {
+        type: "trace",
+        entry: {
+          type: "text",
+          content: response.text,
+          timestamp: new Date().toISOString(),
+        },
       };
     }
 
-    // For Gemini 3: Use modelParts for recirculation (preserves thinking signatures)
-    // This is critical - we must pass back ALL model parts including thinking
+    // No tool calls - agent is done
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      yield {
+        type: "done",
+        completed,
+        needsUserInput: !!response.text,
+      };
+      return;
+    }
+
     const responseParts = [];
 
     for (const tc of response.toolCalls) {
       toolCallCount++;
 
-      trace.push({
-        type: "tool_call",
-        content: `${tc.name}(${JSON.stringify(tc.args)})`,
-        name: tc.name,
-        args: tc.args,
-        timestamp: new Date().toISOString(),
-      });
+      // Emit tool call
+      yield {
+        type: "trace",
+        entry: {
+          type: "tool_call",
+          content: `${tc.name}(${JSON.stringify(tc.args)})`,
+          name: tc.name,
+          args: tc.args,
+          timestamp: new Date().toISOString(),
+        },
+      };
 
-      // Check for completion
+      // Emit updated tool count
+      yield {
+        type: "tokens",
+        inputTokens,
+        outputTokens,
+        thinkingTokens,
+        toolCallCount,
+      };
+
       if (tc.name === "supervisor_complete_task") {
         completed = true;
       }
@@ -227,43 +258,39 @@ async function runGeminiLoop(
         baseUrl
       );
 
-      trace.push({
-        type: "tool_result",
-        content: result,
-        name: tc.name,
-        timestamp: new Date().toISOString(),
-      });
+      // Emit tool result
+      yield {
+        type: "trace",
+        entry: {
+          type: "tool_result",
+          content: result,
+          name: tc.name,
+          timestamp: new Date().toISOString(),
+        },
+      };
 
       responseParts.push(createFunctionResponsePart(tc.name, result));
     }
 
-    // CRITICAL for Gemini 3: Use the complete modelParts from response
-    // This preserves thinking signatures for proper recirculation
     if (response.modelParts && response.modelParts.length > 0) {
       messages.push(createModelMessageFromParts(response.modelParts));
     }
     messages.push({ role: "user", parts: responseParts });
 
-    // If completed, break
     if (completed) {
       break;
     }
   }
 
-  return {
-    trace,
-    finalText,
-    inputTokens,
-    outputTokens,
-    thinkingTokens,
-    toolCallCount,
+  yield {
+    type: "done",
     completed,
     needsUserInput: false,
   };
 }
 
-// Run the agentic loop for Anthropic
-async function runAnthropicLoop(
+// Streaming Anthropic agent loop
+async function* runAnthropicLoopStreaming(
   apiKey: string,
   modelName: string,
   systemPrompt: string,
@@ -273,14 +300,12 @@ async function runAnthropicLoop(
   cookie: string,
   baseUrl: string,
   maxIterations: number = 50
-): Promise<AgentLoopResult> {
-  const trace: TraceEntry[] = [];
+): AsyncGenerator<SSEEvent> {
   const messages = [...initialMessages];
   let inputTokens = 0;
   let outputTokens = 0;
   let toolCallCount = 0;
   let completed = false;
-  let finalText: string | undefined;
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await callAnthropic(
@@ -294,56 +319,67 @@ async function runAnthropicLoop(
     inputTokens += response.inputTokens;
     outputTokens += response.outputTokens;
 
-    // Handle text response
-    if (response.text) {
-      trace.push({
-        type: "text",
-        content: response.text,
-        timestamp: new Date().toISOString(),
-      });
-      finalText = response.text;
-    }
+    yield {
+      type: "tokens",
+      inputTokens,
+      outputTokens,
+      thinkingTokens: 0,
+      toolCallCount,
+    };
 
-    // No tool calls - agent is done or needs input
-    if (!response.toolCalls || response.toolCalls.length === 0) {
-      return {
-        trace,
-        finalText,
-        inputTokens,
-        outputTokens,
-        thinkingTokens: 0,
-        toolCallCount,
-        completed,
-        needsUserInput: !!response.text,
+    if (response.text) {
+      yield {
+        type: "trace",
+        entry: {
+          type: "text",
+          content: response.text,
+          timestamp: new Date().toISOString(),
+        },
       };
     }
 
-    // Add assistant message with tool calls
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      yield {
+        type: "done",
+        completed,
+        needsUserInput: !!response.text,
+      };
+      return;
+    }
+
     messages.push({
       role: "assistant",
       content: createAssistantContent(response.text, response.toolCalls),
     });
 
-    // Process tool calls
     const toolResults: Array<ReturnType<typeof createToolResultContent>> = [];
 
     for (const tc of response.toolCalls) {
       toolCallCount++;
 
-      trace.push({
-        type: "tool_call",
-        content: `${tc.name}(${JSON.stringify(tc.args)})`,
-        name: tc.name,
-        args: tc.args,
-        timestamp: new Date().toISOString(),
-      });
+      yield {
+        type: "trace",
+        entry: {
+          type: "tool_call",
+          content: `${tc.name}(${JSON.stringify(tc.args)})`,
+          name: tc.name,
+          args: tc.args,
+          timestamp: new Date().toISOString(),
+        },
+      };
 
-      // Check for completion
+      yield {
+        type: "tokens",
+        inputTokens,
+        outputTokens,
+        thinkingTokens: 0,
+        toolCallCount,
+      };
+
       if (tc.name === "supervisor_complete_task") {
         completed = true;
       }
 
-      // Execute the tool
       const result = await executeToolCall(
         { id: tc.id, name: tc.name, args: tc.args },
         taskId,
@@ -351,42 +387,38 @@ async function runAnthropicLoop(
         baseUrl
       );
 
-      trace.push({
-        type: "tool_result",
-        content: result,
-        name: tc.name,
-        timestamp: new Date().toISOString(),
-      });
+      yield {
+        type: "trace",
+        entry: {
+          type: "tool_result",
+          content: result,
+          name: tc.name,
+          timestamp: new Date().toISOString(),
+        },
+      };
 
       toolResults.push(createToolResultContent(tc.id, result));
     }
 
-    // Add tool results as user message
     messages.push({
       role: "user",
       content: toolResults,
     });
 
-    // If completed, break
     if (completed) {
       break;
     }
   }
 
-  return {
-    trace,
-    finalText,
-    inputTokens,
-    outputTokens,
-    thinkingTokens: 0,
-    toolCallCount,
+  yield {
+    type: "done",
     completed,
     needsUserInput: false,
   };
 }
 
-// Run the agentic loop for OpenAI
-async function runOpenAILoop(
+// Streaming OpenAI agent loop
+async function* runOpenAILoopStreaming(
   apiKey: string,
   modelName: string,
   systemPrompt: string,
@@ -396,14 +428,12 @@ async function runOpenAILoop(
   cookie: string,
   baseUrl: string,
   maxIterations: number = 50
-): Promise<AgentLoopResult> {
-  const trace: TraceEntry[] = [];
+): AsyncGenerator<SSEEvent> {
   const messages = [...initialMessages];
   let inputTokens = 0;
   let outputTokens = 0;
   let toolCallCount = 0;
   let completed = false;
-  let finalText: string | undefined;
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await callOpenAI(
@@ -417,51 +447,62 @@ async function runOpenAILoop(
     inputTokens += response.inputTokens;
     outputTokens += response.outputTokens;
 
-    // Handle text response
+    yield {
+      type: "tokens",
+      inputTokens,
+      outputTokens,
+      thinkingTokens: 0,
+      toolCallCount,
+    };
+
     if (response.text) {
-      trace.push({
-        type: "text",
-        content: response.text,
-        timestamp: new Date().toISOString(),
-      });
-      finalText = response.text;
+      yield {
+        type: "trace",
+        entry: {
+          type: "text",
+          content: response.text,
+          timestamp: new Date().toISOString(),
+        },
+      };
     }
 
-    // No tool calls - agent is done or needs input
     if (!response.toolCalls || response.toolCalls.length === 0) {
-      return {
-        trace,
-        finalText,
+      yield {
+        type: "done",
+        completed,
+        needsUserInput: !!response.text,
+      };
+      return;
+    }
+
+    messages.push(createAssistantMessage(response.text, response.toolCalls));
+
+    for (const tc of response.toolCalls) {
+      toolCallCount++;
+
+      yield {
+        type: "trace",
+        entry: {
+          type: "tool_call",
+          content: `${tc.name}(${JSON.stringify(tc.args)})`,
+          name: tc.name,
+          args: tc.args,
+          timestamp: new Date().toISOString(),
+        },
+      };
+
+      yield {
+        type: "tokens",
         inputTokens,
         outputTokens,
         thinkingTokens: 0,
         toolCallCount,
-        completed,
-        needsUserInput: !!response.text,
       };
-    }
 
-    // Add assistant message with tool calls
-    messages.push(createAssistantMessage(response.text, response.toolCalls));
-
-    // Process tool calls
-    for (const tc of response.toolCalls) {
-      toolCallCount++;
-
-      trace.push({
-        type: "tool_call",
-        content: `${tc.name}(${JSON.stringify(tc.args)})`,
-        name: tc.name,
-        args: tc.args,
-        timestamp: new Date().toISOString(),
-      });
-
-      // Check for completion
       if (tc.name === "supervisor_complete_task") {
         completed = true;
       }
 
-      // Execute the tool
       const result = await executeToolCall(
         { id: tc.id, name: tc.name, args: tc.args },
         taskId,
@@ -469,30 +510,26 @@ async function runOpenAILoop(
         baseUrl
       );
 
-      trace.push({
-        type: "tool_result",
-        content: result,
-        name: tc.name,
-        timestamp: new Date().toISOString(),
-      });
+      yield {
+        type: "trace",
+        entry: {
+          type: "tool_result",
+          content: result,
+          name: tc.name,
+          timestamp: new Date().toISOString(),
+        },
+      };
 
-      // Add tool result
       messages.push(createToolResultMessage(tc.id, result));
     }
 
-    // If completed, break
     if (completed) {
       break;
     }
   }
 
-  return {
-    trace,
-    finalText,
-    inputTokens,
-    outputTokens,
-    thinkingTokens: 0,
-    toolCallCount,
+  yield {
+    type: "done",
     completed,
     needsUserInput: false,
   };
@@ -500,23 +537,20 @@ async function runOpenAILoop(
 
 export async function POST(request: NextRequest) {
   try {
-    // Determine base URL from request
     const protocol = request.headers.get("x-forwarded-proto") || "http";
     const host = request.headers.get("host") || "localhost:3000";
     const baseUrl = `${protocol}://${host}`;
     console.log(`[Chat API] Using base URL: ${baseUrl}`);
 
-    // Get headers
     const providerHeader = request.headers.get("x-model-provider");
     const apiKey = request.headers.get("x-api-key");
-    const modelName = request.headers.get("x-model-name") || "gemini-2.0-flash";
+    const modelName = request.headers.get("x-model-name") || "gemini-3-flash-preview";
     const enabledServicesHeader = request.headers.get("x-enabled-services");
 
     if (!apiKey) {
       return Response.json({ error: "Missing x-api-key header" }, { status: 400 });
     }
 
-    // Parse enabled services
     const enabledServices = enabledServicesHeader
       ? enabledServicesHeader.split(",").map((s) => s.trim())
       : [
@@ -531,13 +565,9 @@ export async function POST(request: NextRequest) {
           "file_system",
         ];
 
-    // Get provider from header
     const provider = validateProvider(providerHeader);
-
-    // Get enabled functions
     const functions = getEnabledFunctions(enabledServices);
 
-    // Parse request body
     const body: ChatRequest = await request.json();
     const { messages, systemPrompt, taskId, cookie } = body;
 
@@ -548,151 +578,175 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Run the appropriate agent loop
-    let result: AgentLoopResult;
+    // Create streaming response
+    const encoder = new TextEncoder();
 
-    if (provider === "gemini") {
-      // Convert messages to Gemini format
-      const geminiMessages: GeminiMessage[] = [];
-      for (const msg of messages) {
-        if (msg.role === "user") {
-          geminiMessages.push({
-            role: "user",
-            parts: [{ text: msg.content }],
-          });
-        } else if (msg.role === "assistant") {
-          if (msg.toolCalls) {
-            geminiMessages.push({
-              role: "model",
-              parts: msg.toolCalls.map((tc) =>
-                createFunctionCallPart(tc.name, tc.args)
-              ),
-            });
-          } else {
-            geminiMessages.push({
-              role: "model",
-              parts: [{ text: msg.content }],
-            });
-          }
-        }
-        // Handle tool results
-        if (msg.toolResults) {
-          geminiMessages.push({
-            role: "user",
-            parts: msg.toolResults.map((tr) =>
-              createFunctionResponsePart(tr.name, tr.result)
-            ),
-          });
-        }
-      }
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          let eventGenerator: AsyncGenerator<SSEEvent>;
 
-      result = await runGeminiLoop(
-        apiKey,
-        modelName,
-        systemPrompt,
-        geminiMessages,
-        functions,
-        taskId,
-        cookie,
-        baseUrl
-      );
-    } else if (provider === "anthropic") {
-      // Convert messages to Anthropic format
-      const anthropicMessages: MessageParam[] = [];
-      for (const msg of messages) {
-        if (msg.role === "user") {
-          anthropicMessages.push({
-            role: "user",
-            content: [createTextContent(msg.content)],
-          });
-        } else if (msg.role === "assistant") {
-          if (msg.toolCalls) {
-            const toolCalls: AnthropicToolCall[] = msg.toolCalls.map(
-              (tc, idx) => ({
-                id: tc.id || `tool_${idx}`,
-                name: tc.name,
-                args: tc.args,
-              })
+          if (provider === "gemini") {
+            const geminiMessages: GeminiMessage[] = [];
+            for (const msg of messages) {
+              if (msg.role === "user") {
+                geminiMessages.push({
+                  role: "user",
+                  parts: [{ text: msg.content }],
+                });
+              } else if (msg.role === "assistant") {
+                if (msg.toolCalls) {
+                  geminiMessages.push({
+                    role: "model",
+                    parts: msg.toolCalls.map((tc) =>
+                      createFunctionCallPart(tc.name, tc.args)
+                    ),
+                  });
+                } else {
+                  geminiMessages.push({
+                    role: "model",
+                    parts: [{ text: msg.content }],
+                  });
+                }
+              }
+              if (msg.toolResults) {
+                geminiMessages.push({
+                  role: "user",
+                  parts: msg.toolResults.map((tr) =>
+                    createFunctionResponsePart(tr.name, tr.result)
+                  ),
+                });
+              }
+            }
+
+            eventGenerator = runGeminiLoopStreaming(
+              apiKey,
+              modelName,
+              systemPrompt,
+              geminiMessages,
+              functions,
+              taskId,
+              cookie,
+              baseUrl
             );
-            anthropicMessages.push({
-              role: "assistant",
-              content: createAssistantContent(msg.content, toolCalls),
-            });
-          } else {
-            anthropicMessages.push({
-              role: "assistant",
-              content: msg.content,
-            });
-          }
-        }
-        // Handle tool results
-        if (msg.toolResults) {
-          anthropicMessages.push({
-            role: "user",
-            content: msg.toolResults.map((tr) =>
-              createToolResultContent(tr.id || `tool_${0}`, tr.result)
-            ),
-          });
-        }
-      }
+          } else if (provider === "anthropic") {
+            const anthropicMessages: MessageParam[] = [];
+            for (const msg of messages) {
+              if (msg.role === "user") {
+                anthropicMessages.push({
+                  role: "user",
+                  content: [createTextContent(msg.content)],
+                });
+              } else if (msg.role === "assistant") {
+                if (msg.toolCalls) {
+                  const toolCalls: AnthropicToolCall[] = msg.toolCalls.map(
+                    (tc, idx) => ({
+                      id: tc.id || `tool_${idx}`,
+                      name: tc.name,
+                      args: tc.args,
+                    })
+                  );
+                  anthropicMessages.push({
+                    role: "assistant",
+                    content: createAssistantContent(msg.content, toolCalls),
+                  });
+                } else {
+                  anthropicMessages.push({
+                    role: "assistant",
+                    content: msg.content,
+                  });
+                }
+              }
+              if (msg.toolResults) {
+                anthropicMessages.push({
+                  role: "user",
+                  content: msg.toolResults.map((tr) =>
+                    createToolResultContent(tr.id || `tool_${0}`, tr.result)
+                  ),
+                });
+              }
+            }
 
-      result = await runAnthropicLoop(
-        apiKey,
-        modelName,
-        systemPrompt,
-        anthropicMessages,
-        functions,
-        taskId,
-        cookie,
-        baseUrl
-      );
-    } else {
-      // OpenAI
-      const openaiMessages: ChatCompletionMessageParam[] = [];
-      for (const msg of messages) {
-        if (msg.role === "user") {
-          openaiMessages.push({
-            role: "user",
-            content: msg.content,
-          });
-        } else if (msg.role === "assistant") {
-          if (msg.toolCalls) {
-            const toolCalls: OpenAIToolCall[] = msg.toolCalls.map((tc, idx) => ({
-              id: tc.id || `call_${idx}`,
-              name: tc.name,
-              args: tc.args,
-            }));
-            openaiMessages.push(createAssistantMessage(msg.content, toolCalls));
+            eventGenerator = runAnthropicLoopStreaming(
+              apiKey,
+              modelName,
+              systemPrompt,
+              anthropicMessages,
+              functions,
+              taskId,
+              cookie,
+              baseUrl
+            );
           } else {
-            openaiMessages.push({
-              role: "assistant",
-              content: msg.content,
-            });
-          }
-        }
-        // Handle tool results
-        if (msg.toolResults) {
-          for (const tr of msg.toolResults) {
-            openaiMessages.push(
-              createToolResultMessage(tr.id || `call_${0}`, tr.result)
+            const openaiMessages: ChatCompletionMessageParam[] = [];
+            for (const msg of messages) {
+              if (msg.role === "user") {
+                openaiMessages.push({
+                  role: "user",
+                  content: msg.content,
+                });
+              } else if (msg.role === "assistant") {
+                if (msg.toolCalls) {
+                  const toolCalls: OpenAIToolCall[] = msg.toolCalls.map((tc, idx) => ({
+                    id: tc.id || `call_${idx}`,
+                    name: tc.name,
+                    args: tc.args,
+                  }));
+                  openaiMessages.push(createAssistantMessage(msg.content, toolCalls));
+                } else {
+                  openaiMessages.push({
+                    role: "assistant",
+                    content: msg.content,
+                  });
+                }
+              }
+              if (msg.toolResults) {
+                for (const tr of msg.toolResults) {
+                  openaiMessages.push(
+                    createToolResultMessage(tr.id || `call_${0}`, tr.result)
+                  );
+                }
+              }
+            }
+
+            eventGenerator = runOpenAILoopStreaming(
+              apiKey,
+              modelName,
+              systemPrompt,
+              openaiMessages,
+              functions,
+              taskId,
+              cookie,
+              baseUrl
             );
           }
+
+          // Stream events
+          for await (const event of eventGenerator) {
+            controller.enqueue(encoder.encode(formatSSE(event)));
+          }
+
+          controller.close();
+        } catch (error) {
+          console.error("Streaming error:", error);
+          const errorEvent: ErrorEvent = {
+            type: "error",
+            error: "Agent error",
+            details: error instanceof Error ? error.message : "Unknown error",
+          };
+          controller.enqueue(encoder.encode(formatSSE(errorEvent)));
+          controller.close();
         }
-      }
+      },
+    });
 
-      result = await runOpenAILoop(
-        apiKey,
-        modelName,
-        systemPrompt,
-        openaiMessages,
-        functions,
-        taskId,
-        cookie,
-        baseUrl
-      );
-    }
-
-    return Response.json(result);
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
+    });
   } catch (error) {
     console.error("Chat API error:", error);
     return Response.json(

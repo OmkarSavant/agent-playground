@@ -26,6 +26,7 @@ export default function Home() {
   const [state, setState] = useState<PlaygroundState>(defaultState);
   const [infoOpen, setInfoOpen] = useState(false);
   const [userPrompt, setUserPrompt] = useState("");
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   // Load persisted state on mount
   useEffect(() => {
@@ -130,11 +131,15 @@ export default function Home() {
     }
   };
 
-  // Run agent
+  // Run agent with streaming
   const handleRunAgent = async () => {
     if (!state.isInitialized || !state.gaesaCookie || !userPrompt.trim()) {
       return;
     }
+
+    // Create abort controller for this request
+    const controller = new AbortController();
+    setAbortController(controller);
 
     setState((prev) => ({ ...prev, isRunning: true, shouldStop: false }));
     addTraceEntry("user_input", userPrompt);
@@ -155,52 +160,115 @@ export default function Home() {
           taskId: state.taskId,
           cookie: state.gaesaCookie,
         }),
+        signal: controller.signal,
       });
 
-      const data = await response.json();
+      // Check if it's a streaming response
+      const contentType = response.headers.get("content-type");
 
-      if (data.error) {
-        addTraceEntry("error", `Agent error: ${data.error}${data.details ? ` - ${data.details}` : ""}`);
-        setState((prev) => ({ ...prev, isRunning: false }));
-        return;
-      }
-
-      // Add trace entries from response
-      if (data.trace) {
-        for (const entry of data.trace) {
-          addTraceEntry(entry.type, entry.content, entry.name, entry.args);
+      if (contentType?.includes("text/event-stream")) {
+        // Handle SSE stream
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("No response body");
         }
-      }
 
-      // Update token usage
-      setState((prev) => ({
-        ...prev,
-        tokenUsage: {
-          inputTokens: prev.tokenUsage.inputTokens + (data.inputTokens || 0),
-          outputTokens: prev.tokenUsage.outputTokens + (data.outputTokens || 0),
-          thinkingTokens: prev.tokenUsage.thinkingTokens + (data.thinkingTokens || 0),
-          toolCalls: prev.tokenUsage.toolCalls + (data.toolCallCount || 0),
-        },
-        isRunning: false,
-      }));
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-      if (data.completed) {
-        addTraceEntry("text", "Agent marked task as complete.");
-      } else if (data.needsUserInput) {
-        addTraceEntry("text", "Agent is waiting for additional input...");
-        setState((prev) => ({ ...prev, isRunning: true }));
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete SSE events
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || ""; // Keep incomplete event in buffer
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const event = JSON.parse(line.slice(6));
+
+                if (event.type === "trace") {
+                  addTraceEntry(
+                    event.entry.type,
+                    event.entry.content,
+                    event.entry.name,
+                    event.entry.args
+                  );
+                } else if (event.type === "tokens") {
+                  setState((prev) => ({
+                    ...prev,
+                    tokenUsage: {
+                      inputTokens: event.inputTokens,
+                      outputTokens: event.outputTokens,
+                      thinkingTokens: event.thinkingTokens,
+                      toolCalls: event.toolCallCount,
+                    },
+                  }));
+                } else if (event.type === "done") {
+                  if (event.completed) {
+                    addTraceEntry("text", "Agent marked task as complete.");
+                  } else if (event.needsUserInput) {
+                    addTraceEntry("text", "Agent is waiting for additional input...");
+                  }
+                  setState((prev) => ({ ...prev, isRunning: false }));
+                } else if (event.type === "error") {
+                  addTraceEntry("error", `Agent error: ${event.error}${event.details ? ` - ${event.details}` : ""}`);
+                  setState((prev) => ({ ...prev, isRunning: false }));
+                }
+              } catch (parseError) {
+                console.error("Failed to parse SSE event:", line, parseError);
+              }
+            }
+          }
+        }
+
+        // Process any remaining buffer
+        if (buffer.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(buffer.slice(6));
+            if (event.type === "done") {
+              setState((prev) => ({ ...prev, isRunning: false }));
+            }
+          } catch {
+            // Ignore incomplete final event
+          }
+        }
+
+        setState((prev) => ({ ...prev, isRunning: false }));
+      } else {
+        // Handle non-streaming response (error case)
+        const data = await response.json();
+        if (data.error) {
+          addTraceEntry("error", `Agent error: ${data.error}${data.details ? ` - ${data.details}` : ""}`);
+        }
+        setState((prev) => ({ ...prev, isRunning: false }));
       }
     } catch (error) {
+      // Don't show error if it was an intentional abort
+      if (error instanceof Error && error.name === "AbortError") {
+        // Already handled by handleStopAgent
+        return;
+      }
       addTraceEntry(
         "error",
         `Agent error: ${error instanceof Error ? error.message : "Unknown error"}`
       );
       setState((prev) => ({ ...prev, isRunning: false }));
+    } finally {
+      setAbortController(null);
     }
   };
 
   // Stop agent
   const handleStopAgent = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
     setState((prev) => ({ ...prev, shouldStop: true, isRunning: false }));
     addTraceEntry("text", "Agent stopped by user.");
   };

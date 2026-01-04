@@ -23,13 +23,11 @@ export function RightPanel({
 }: RightPanelProps) {
   const [userInput, setUserInput] = useState("");
   const [copied, setCopied] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when trace updates
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [trace]);
 
   const handleSend = () => {
@@ -131,7 +129,7 @@ export function RightPanel({
       </div>
 
       {/* Trace log */}
-      <ScrollArea className="flex-1" ref={scrollRef}>
+      <ScrollArea className="flex-1">
         <div className="space-y-2 p-3">
           {trace.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
@@ -158,6 +156,7 @@ export function RightPanel({
               </div>
             ))
           )}
+          <div ref={scrollEndRef} />
         </div>
       </ScrollArea>
 
