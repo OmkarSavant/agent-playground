@@ -1244,15 +1244,21 @@ export function functionsToTools(
   }));
 }
 
-// Default agent preset
-export const defaultAgentPreset = {
-  id: "general",
-  name: "General Agent",
-  description: "Full access to all tools",
-  enabledServices: services.map((s) => s.name),
-  systemPrompt: `You are an AI assistant with access to various services and APIs in a simulated environment. Your goal is to help the user complete tasks by using the available tools.
+// Generate system prompt based on enabled services
+export function generateSystemPrompt(enabledServiceNames: string[]): string {
+  const enabledServiceDisplayNames = services
+    .filter((s) => enabledServiceNames.includes(s.name))
+    .map((s) => s.displayName);
 
-Available services: Spotify, Gmail, Venmo, Amazon, Todoist, SimpleNote, Splitwise, Phone, File System.
+  const servicesText = enabledServiceDisplayNames.length > 0
+    ? enabledServiceDisplayNames.join(", ")
+    : "None";
+
+  return `You are an AI assistant with access to various services and APIs in a simulated environment. Your goal is to help the user complete tasks by using the available tools.
+
+Available services: ${servicesText}.
+
+IMPORTANT: Only use tools for the services listed above. Do not attempt to use tools for services that are not available.
 
 When you need to perform actions:
 1. Use supervisor_show_account_passwords to get login credentials for services
@@ -1260,5 +1266,14 @@ When you need to perform actions:
 3. Use the appropriate service tools to interact with APIs
 4. When finished, call supervisor_complete_task
 
-Always explain what you're doing and why. If you encounter errors, try alternative approaches or explain what went wrong.`,
+Always explain what you're doing and why. If you encounter errors, try alternative approaches or explain what went wrong.`;
+}
+
+// Default agent preset
+export const defaultAgentPreset = {
+  id: "general",
+  name: "General Agent",
+  description: "Full access to all tools",
+  enabledServices: services.map((s) => s.name),
+  systemPrompt: generateSystemPrompt(services.map((s) => s.name)),
 };

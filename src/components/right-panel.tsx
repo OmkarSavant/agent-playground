@@ -12,6 +12,7 @@ interface RightPanelProps {
   trace: TraceEntry[];
   tokenUsage: TokenUsage;
   isRunning: boolean;
+  needsUserInput: boolean;
   onSendUserInput: (input: string) => void;
 }
 
@@ -19,6 +20,7 @@ export function RightPanel({
   trace,
   tokenUsage,
   isRunning,
+  needsUserInput,
   onSendUserInput,
 }: RightPanelProps) {
   const [userInput, setUserInput] = useState("");
@@ -168,14 +170,14 @@ export function RightPanel({
             onChange={(e) => setUserInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Add'l user input..."
-            disabled={!isRunning}
+            disabled={!isRunning && !needsUserInput}
             className="h-8 text-sm"
           />
           <Button
             size="icon"
             className="h-8 w-8"
             onClick={handleSend}
-            disabled={!isRunning || !userInput.trim()}
+            disabled={(!isRunning && !needsUserInput) || !userInput.trim()}
           >
             <Send className="h-3 w-3" />
           </Button>

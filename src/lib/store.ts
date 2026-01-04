@@ -18,6 +18,14 @@ export interface TokenUsage {
   toolCalls: number;
 }
 
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  toolCalls?: Array<{ id: string; name: string; args: Record<string, any> }>;
+  toolResults?: Array<{ id: string; name: string; result: string }>;
+}
+
 export type ModelProvider = "gemini" | "anthropic" | "openai";
 
 export interface PlaygroundState {
@@ -34,10 +42,12 @@ export interface PlaygroundState {
   isInitialized: boolean;
   isRunning: boolean;
   shouldStop: boolean;
+  needsUserInput: boolean;
 
   // Trace
   trace: TraceEntry[];
   tokenUsage: TokenUsage;
+  conversationMessages: ConversationMessage[];
 
   // World context (lazy loaded)
   worldContext: string | null;
@@ -55,6 +65,7 @@ export const defaultState: PlaygroundState = {
   isInitialized: false,
   isRunning: false,
   shouldStop: false,
+  needsUserInput: false,
   trace: [],
   tokenUsage: {
     inputTokens: 0,
@@ -62,6 +73,7 @@ export const defaultState: PlaygroundState = {
     thinkingTokens: 0,
     toolCalls: 0,
   },
+  conversationMessages: [],
   worldContext: null,
   isLoadingWorldContext: false,
 };

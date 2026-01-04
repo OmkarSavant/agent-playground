@@ -20,7 +20,7 @@ import {
   persistState,
   generateId,
 } from "@/lib/store";
-import { services, defaultAgentPreset } from "@/lib/services";
+import { services, defaultAgentPreset, generateSystemPrompt } from "@/lib/services";
 
 export default function Home() {
   const [state, setState] = useState<PlaygroundState>(defaultState);
@@ -118,7 +118,7 @@ export default function Home() {
 
         if (passwordsData.output && !passwordsData.output.includes("Exception")) {
           const credentialsSection = `\n\n## Available Credentials\n${passwordsData.output}`;
-          const updatedPrompt = defaultAgentPreset.systemPrompt + credentialsSection;
+          const updatedPrompt = generateSystemPrompt(state.enabledServices) + credentialsSection;
           updateState({ systemPrompt: updatedPrompt });
           addTraceEntry("text", "Credentials retrieved and added to system prompt.");
         }
@@ -141,7 +141,15 @@ export default function Home() {
     const controller = new AbortController();
     setAbortController(controller);
 
-    setState((prev) => ({ ...prev, isRunning: true, shouldStop: false }));
+    // Add initial user message to conversation
+    const initialMessage = { role: "user" as const, content: userPrompt };
+    setState((prev) => ({
+      ...prev,
+      isRunning: true,
+      shouldStop: false,
+      needsUserInput: false,
+      conversationMessages: [initialMessage],
+    }));
     addTraceEntry("user_input", userPrompt);
 
     try {
@@ -155,7 +163,7 @@ export default function Home() {
           "x-enabled-services": state.enabledServices.join(","),
         },
         body: JSON.stringify({
-          messages: [{ role: "user", content: userPrompt }],
+          messages: [initialMessage],
           systemPrompt: state.systemPrompt,
           taskId: state.taskId,
           cookie: state.gaesaCookie,
@@ -214,7 +222,12 @@ export default function Home() {
                   } else if (event.needsUserInput) {
                     addTraceEntry("text", "Agent is waiting for additional input...");
                   }
-                  setState((prev) => ({ ...prev, isRunning: false }));
+                  setState((prev) => ({
+                    ...prev,
+                    isRunning: false,
+                    needsUserInput: event.needsUserInput || false,
+                    conversationMessages: event.messages || prev.conversationMessages,
+                  }));
                 } else if (event.type === "error") {
                   addTraceEntry("error", `Agent error: ${event.error}${event.details ? ` - ${event.details}` : ""}`);
                   setState((prev) => ({ ...prev, isRunning: false }));
@@ -269,7 +282,7 @@ export default function Home() {
       abortController.abort();
       setAbortController(null);
     }
-    setState((prev) => ({ ...prev, shouldStop: true, isRunning: false }));
+    setState((prev) => ({ ...prev, shouldStop: true, isRunning: false, needsUserInput: false }));
     addTraceEntry("text", "Agent stopped by user.");
   };
 
@@ -287,6 +300,8 @@ export default function Home() {
       worldContext: null,
       isInitialized: false,
       gaesaCookie: null,
+      needsUserInput: false,
+      conversationMessages: [],
     }));
     setUserPrompt("");
 
@@ -308,6 +323,8 @@ export default function Home() {
       worldContext: null,
       isInitialized: false,
       gaesaCookie: null,
+      needsUserInput: false,
+      conversationMessages: [],
     }));
 
     await handleInitialize();
@@ -350,17 +367,142 @@ export default function Home() {
   };
 
   // Send additional user input (multi-turn)
-  const handleSendUserInput = (input: string) => {
+  const handleSendUserInput = async (input: string) => {
+    if (!state.isInitialized || !state.gaesaCookie || !input.trim()) {
+      return;
+    }
+
+    // Add user message to conversation
+    const newUserMessage = { role: "user" as const, content: input };
+    const updatedMessages = [...state.conversationMessages, newUserMessage];
+
+    // Create abort controller for this request
+    const controller = new AbortController();
+    setAbortController(controller);
+
+    setState((prev) => ({
+      ...prev,
+      isRunning: true,
+      shouldStop: false,
+      needsUserInput: false,
+      conversationMessages: updatedMessages,
+    }));
     addTraceEntry("user_input", input);
-    // In a full implementation, this would continue the agent loop
-    // For now, we just log it
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": state.apiKey,
+          "x-model-provider": state.provider,
+          "x-model-name": state.modelName,
+          "x-enabled-services": state.enabledServices.join(","),
+        },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          systemPrompt: state.systemPrompt,
+          taskId: state.taskId,
+          cookie: state.gaesaCookie,
+        }),
+        signal: controller.signal,
+      });
+
+      const contentType = response.headers.get("content-type");
+
+      if (contentType?.includes("text/event-stream")) {
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("No response body");
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const event = JSON.parse(line.slice(6));
+
+                if (event.type === "trace") {
+                  addTraceEntry(
+                    event.entry.type,
+                    event.entry.content,
+                    event.entry.name,
+                    event.entry.args
+                  );
+                } else if (event.type === "tokens") {
+                  setState((prev) => ({
+                    ...prev,
+                    tokenUsage: {
+                      inputTokens: event.inputTokens,
+                      outputTokens: event.outputTokens,
+                      thinkingTokens: event.thinkingTokens,
+                      toolCalls: event.toolCallCount,
+                    },
+                  }));
+                } else if (event.type === "done") {
+                  if (event.completed) {
+                    addTraceEntry("text", "Agent marked task as complete.");
+                  } else if (event.needsUserInput) {
+                    addTraceEntry("text", "Agent is waiting for additional input...");
+                  }
+                  setState((prev) => ({
+                    ...prev,
+                    isRunning: false,
+                    needsUserInput: event.needsUserInput || false,
+                    conversationMessages: event.messages || prev.conversationMessages,
+                  }));
+                } else if (event.type === "error") {
+                  addTraceEntry("error", `Agent error: ${event.error}${event.details ? ` - ${event.details}` : ""}`);
+                  setState((prev) => ({ ...prev, isRunning: false }));
+                }
+              } catch (parseError) {
+                console.error("Failed to parse SSE event:", line, parseError);
+              }
+            }
+          }
+        }
+
+        setState((prev) => ({ ...prev, isRunning: false }));
+      } else {
+        const data = await response.json();
+        if (data.error) {
+          addTraceEntry("error", `Agent error: ${data.error}${data.details ? ` - ${data.details}` : ""}`);
+        }
+        setState((prev) => ({ ...prev, isRunning: false }));
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+      addTraceEntry(
+        "error",
+        `Agent error: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+      setState((prev) => ({ ...prev, isRunning: false }));
+    } finally {
+      setAbortController(null);
+    }
   };
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <LeftSidebar
         enabledServices={state.enabledServices}
-        onServicesChange={(services) => updateState({ enabledServices: services })}
+        onServicesChange={(services) => updateState({
+          enabledServices: services,
+          systemPrompt: generateSystemPrompt(services),
+        })}
         onResetWorld={handleResetWorld}
         onShowInfo={() => setInfoOpen(true)}
         isInitialized={state.isInitialized}
@@ -395,6 +537,7 @@ export default function Home() {
         trace={state.trace}
         tokenUsage={state.tokenUsage}
         isRunning={state.isRunning}
+        needsUserInput={state.needsUserInput}
         onSendUserInput={handleSendUserInput}
       />
 

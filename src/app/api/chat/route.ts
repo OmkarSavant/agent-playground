@@ -70,10 +70,19 @@ interface TokenEvent {
   toolCallCount: number;
 }
 
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  toolCalls?: Array<{ id: string; name: string; args: Record<string, any> }>;
+  toolResults?: Array<{ id: string; name: string; result: string }>;
+}
+
 interface DoneEvent {
   type: "done";
   completed: boolean;
   needsUserInput: boolean;
+  messages: ConversationMessage[];
 }
 
 interface ErrorEvent {
@@ -163,6 +172,7 @@ async function* runGeminiLoopStreaming(
   modelName: string,
   systemPrompt: string,
   initialMessages: GeminiMessage[],
+  initialConversation: ConversationMessage[],
   functions: ServiceFunction[],
   taskId: string,
   cookie: string,
@@ -170,6 +180,7 @@ async function* runGeminiLoopStreaming(
   maxIterations: number = 50
 ): AsyncGenerator<SSEEvent> {
   const messages = [...initialMessages];
+  const conversation: ConversationMessage[] = [...initialConversation];
   let inputTokens = 0;
   let outputTokens = 0;
   let thinkingTokens = 0;
@@ -212,18 +223,26 @@ async function* runGeminiLoopStreaming(
 
     // No tool calls - agent is done
     if (!response.toolCalls || response.toolCalls.length === 0) {
+      // Add final assistant message to conversation
+      if (response.text) {
+        conversation.push({ role: "assistant", content: response.text });
+      }
       yield {
         type: "done",
         completed,
         needsUserInput: !!response.text,
+        messages: conversation,
       };
       return;
     }
 
     const responseParts = [];
+    const toolCalls: ConversationMessage["toolCalls"] = [];
+    const toolResults: ConversationMessage["toolResults"] = [];
 
     for (const tc of response.toolCalls) {
       toolCallCount++;
+      const callId = `call_${i}_${toolCallCount}`;
 
       // Emit tool call
       yield {
@@ -252,7 +271,7 @@ async function* runGeminiLoopStreaming(
 
       // Execute the tool
       const result = await executeToolCall(
-        { id: `call_${i}_${toolCallCount}`, name: tc.name, args: tc.args },
+        { id: callId, name: tc.name, args: tc.args },
         taskId,
         cookie,
         baseUrl
@@ -270,7 +289,17 @@ async function* runGeminiLoopStreaming(
       };
 
       responseParts.push(createFunctionResponsePart(tc.name, result));
+      toolCalls.push({ id: callId, name: tc.name, args: tc.args });
+      toolResults.push({ id: callId, name: tc.name, result });
     }
+
+    // Track in conversation
+    conversation.push({
+      role: "assistant",
+      content: response.text || "",
+      toolCalls,
+      toolResults,
+    });
 
     if (response.modelParts && response.modelParts.length > 0) {
       messages.push(createModelMessageFromParts(response.modelParts));
@@ -286,6 +315,7 @@ async function* runGeminiLoopStreaming(
     type: "done",
     completed,
     needsUserInput: false,
+    messages: conversation,
   };
 }
 
@@ -295,6 +325,7 @@ async function* runAnthropicLoopStreaming(
   modelName: string,
   systemPrompt: string,
   initialMessages: MessageParam[],
+  initialConversation: ConversationMessage[],
   functions: ServiceFunction[],
   taskId: string,
   cookie: string,
@@ -302,6 +333,7 @@ async function* runAnthropicLoopStreaming(
   maxIterations: number = 50
 ): AsyncGenerator<SSEEvent> {
   const messages = [...initialMessages];
+  const conversation: ConversationMessage[] = [...initialConversation];
   let inputTokens = 0;
   let outputTokens = 0;
   let toolCallCount = 0;
@@ -339,10 +371,14 @@ async function* runAnthropicLoopStreaming(
     }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (response.text) {
+        conversation.push({ role: "assistant", content: response.text });
+      }
       yield {
         type: "done",
         completed,
         needsUserInput: !!response.text,
+        messages: conversation,
       };
       return;
     }
@@ -352,7 +388,9 @@ async function* runAnthropicLoopStreaming(
       content: createAssistantContent(response.text, response.toolCalls),
     });
 
-    const toolResults: Array<ReturnType<typeof createToolResultContent>> = [];
+    const toolResultsForApi: Array<ReturnType<typeof createToolResultContent>> = [];
+    const toolCalls: ConversationMessage["toolCalls"] = [];
+    const toolResults: ConversationMessage["toolResults"] = [];
 
     for (const tc of response.toolCalls) {
       toolCallCount++;
@@ -397,12 +435,22 @@ async function* runAnthropicLoopStreaming(
         },
       };
 
-      toolResults.push(createToolResultContent(tc.id, result));
+      toolResultsForApi.push(createToolResultContent(tc.id, result));
+      toolCalls.push({ id: tc.id, name: tc.name, args: tc.args });
+      toolResults.push({ id: tc.id, name: tc.name, result });
     }
+
+    // Track in conversation
+    conversation.push({
+      role: "assistant",
+      content: response.text || "",
+      toolCalls,
+      toolResults,
+    });
 
     messages.push({
       role: "user",
-      content: toolResults,
+      content: toolResultsForApi,
     });
 
     if (completed) {
@@ -414,6 +462,7 @@ async function* runAnthropicLoopStreaming(
     type: "done",
     completed,
     needsUserInput: false,
+    messages: conversation,
   };
 }
 
@@ -423,6 +472,7 @@ async function* runOpenAILoopStreaming(
   modelName: string,
   systemPrompt: string,
   initialMessages: ChatCompletionMessageParam[],
+  initialConversation: ConversationMessage[],
   functions: ServiceFunction[],
   taskId: string,
   cookie: string,
@@ -430,6 +480,7 @@ async function* runOpenAILoopStreaming(
   maxIterations: number = 50
 ): AsyncGenerator<SSEEvent> {
   const messages = [...initialMessages];
+  const conversation: ConversationMessage[] = [...initialConversation];
   let inputTokens = 0;
   let outputTokens = 0;
   let toolCallCount = 0;
@@ -467,15 +518,22 @@ async function* runOpenAILoopStreaming(
     }
 
     if (!response.toolCalls || response.toolCalls.length === 0) {
+      if (response.text) {
+        conversation.push({ role: "assistant", content: response.text });
+      }
       yield {
         type: "done",
         completed,
         needsUserInput: !!response.text,
+        messages: conversation,
       };
       return;
     }
 
     messages.push(createAssistantMessage(response.text, response.toolCalls));
+
+    const toolCalls: ConversationMessage["toolCalls"] = [];
+    const toolResults: ConversationMessage["toolResults"] = [];
 
     for (const tc of response.toolCalls) {
       toolCallCount++;
@@ -521,7 +579,17 @@ async function* runOpenAILoopStreaming(
       };
 
       messages.push(createToolResultMessage(tc.id, result));
+      toolCalls.push({ id: tc.id, name: tc.name, args: tc.args });
+      toolResults.push({ id: tc.id, name: tc.name, result });
     }
+
+    // Track in conversation
+    conversation.push({
+      role: "assistant",
+      content: response.text || "",
+      toolCalls,
+      toolResults,
+    });
 
     if (completed) {
       break;
@@ -532,6 +600,7 @@ async function* runOpenAILoopStreaming(
     type: "done",
     completed,
     needsUserInput: false,
+    messages: conversation,
   };
 }
 
@@ -619,11 +688,28 @@ export async function POST(request: NextRequest) {
               }
             }
 
+            // Convert incoming messages to conversation format
+            const initialConversation: ConversationMessage[] = messages.map((msg) => ({
+              role: msg.role,
+              content: msg.content,
+              toolCalls: msg.toolCalls?.map((tc) => ({
+                id: tc.id || "",
+                name: tc.name,
+                args: tc.args,
+              })),
+              toolResults: msg.toolResults?.map((tr) => ({
+                id: tr.id || "",
+                name: tr.name,
+                result: tr.result,
+              })),
+            }));
+
             eventGenerator = runGeminiLoopStreaming(
               apiKey,
               modelName,
               systemPrompt,
               geminiMessages,
+              initialConversation,
               functions,
               taskId,
               cookie,
@@ -667,11 +753,28 @@ export async function POST(request: NextRequest) {
               }
             }
 
+            // Convert incoming messages to conversation format
+            const initialConversation: ConversationMessage[] = messages.map((msg) => ({
+              role: msg.role,
+              content: msg.content,
+              toolCalls: msg.toolCalls?.map((tc) => ({
+                id: tc.id || "",
+                name: tc.name,
+                args: tc.args,
+              })),
+              toolResults: msg.toolResults?.map((tr) => ({
+                id: tr.id || "",
+                name: tr.name,
+                result: tr.result,
+              })),
+            }));
+
             eventGenerator = runAnthropicLoopStreaming(
               apiKey,
               modelName,
               systemPrompt,
               anthropicMessages,
+              initialConversation,
               functions,
               taskId,
               cookie,
@@ -709,11 +812,28 @@ export async function POST(request: NextRequest) {
               }
             }
 
+            // Convert incoming messages to conversation format
+            const initialConversation: ConversationMessage[] = messages.map((msg) => ({
+              role: msg.role,
+              content: msg.content,
+              toolCalls: msg.toolCalls?.map((tc) => ({
+                id: tc.id || "",
+                name: tc.name,
+                args: tc.args,
+              })),
+              toolResults: msg.toolResults?.map((tr) => ({
+                id: tr.id || "",
+                name: tr.name,
+                result: tr.result,
+              })),
+            }));
+
             eventGenerator = runOpenAILoopStreaming(
               apiKey,
               modelName,
               systemPrompt,
               openaiMessages,
+              initialConversation,
               functions,
               taskId,
               cookie,
