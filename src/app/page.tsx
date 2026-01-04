@@ -92,11 +92,12 @@ export default function Home() {
         return;
       }
 
-      // Store cookie and update state
+      // Store cookie and update state, reset world context for new task
       setState((prev) => ({
         ...prev,
         gaesaCookie: data.cookie || null,
         isInitialized: true,
+        worldContext: null,
       }));
 
       addTraceEntry("text", "World state initialized successfully.");

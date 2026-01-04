@@ -137,6 +137,10 @@ access_token = login["access_token"]
 print(apis.spotify.show_liked_songs(access_token=access_token))`,
                 baseUrl
               );
+              if (likedSongs.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.likedSongs = parseOutput(likedSongs.output);
 
               const account = await executeCode(
@@ -148,6 +152,8 @@ print(apis.spotify.show_account(access_token=access_token))`,
                 baseUrl
               );
               serviceData.data.account = parseOutput(account.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
@@ -163,6 +169,10 @@ access_token = login["access_token"]
 print(apis.gmail.show_inbox_threads(access_token=access_token))`,
                 baseUrl
               );
+              if (inbox.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.inboxThreads = parseOutput(inbox.output);
 
               const outbox = await executeCode(
@@ -174,6 +184,8 @@ print(apis.gmail.show_outbox_threads(access_token=access_token))`,
                 baseUrl
               );
               serviceData.data.outboxThreads = parseOutput(outbox.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
@@ -181,29 +193,31 @@ print(apis.gmail.show_outbox_threads(access_token=access_token))`,
           case "venmo": {
             const creds = getCredentialsForService(passwords || [], "venmo", email);
             if (creds) {
-              // Login first
-              await executeCode(
-                taskId,
-                cookie,
-                `print(apis.venmo.login(username="${creds.username}", password="${creds.password}"))`,
-                baseUrl
-              );
-
               const account = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.venmo.show_account())",
+                `login = apis.venmo.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.venmo.show_account(access_token=access_token))`,
                 baseUrl
               );
+              if (account.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.account = parseOutput(account.output);
 
               const transactions = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.venmo.show_transactions(limit=10))",
+                `login = apis.venmo.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.venmo.show_transactions(access_token=access_token))`,
                 baseUrl
               );
               serviceData.data.recentTransactions = parseOutput(transactions.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
@@ -211,29 +225,31 @@ print(apis.gmail.show_outbox_threads(access_token=access_token))`,
           case "amazon": {
             const creds = getCredentialsForService(passwords || [], "amazon", email);
             if (creds) {
-              // Login first
-              await executeCode(
-                taskId,
-                cookie,
-                `print(apis.amazon.login(email="${creds.username}", password="${creds.password}"))`,
-                baseUrl
-              );
-
               const orders = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.amazon.show_orders())",
+                `login = apis.amazon.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.amazon.show_orders(access_token=access_token))`,
                 baseUrl
               );
+              if (orders.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.orders = parseOutput(orders.output);
 
               const cart = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.amazon.show_cart())",
+                `login = apis.amazon.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.amazon.show_cart(access_token=access_token))`,
                 baseUrl
               );
               serviceData.data.cart = parseOutput(cart.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
@@ -241,29 +257,21 @@ print(apis.gmail.show_outbox_threads(access_token=access_token))`,
           case "todoist": {
             const creds = getCredentialsForService(passwords || [], "todoist", email);
             if (creds) {
-              // Login first
-              await executeCode(
-                taskId,
-                cookie,
-                `print(apis.todoist.login(email="${creds.username}", password="${creds.password}"))`,
-                baseUrl
-              );
-
               const projects = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.todoist.list_projects())",
+                `login = apis.todoist.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.todoist.show_projects(access_token=access_token))`,
                 baseUrl
               );
+              if (projects.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.projects = parseOutput(projects.output);
-
-              const tasks = await executeCode(
-                taskId,
-                cookie,
-                "print(apis.todoist.list_tasks())",
-                baseUrl
-              );
-              serviceData.data.tasks = parseOutput(tasks.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
@@ -279,7 +287,13 @@ access_token = login["access_token"]
 print(apis.simple_note.search_notes(access_token=access_token, query=""))`,
                 baseUrl
               );
+              if (notes.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.notes = parseOutput(notes.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
@@ -287,87 +301,108 @@ print(apis.simple_note.search_notes(access_token=access_token, query=""))`,
           case "splitwise": {
             const creds = getCredentialsForService(passwords || [], "splitwise", email);
             if (creds) {
-              // Login first
-              await executeCode(
-                taskId,
-                cookie,
-                `print(apis.splitwise.login(email="${creds.username}", password="${creds.password}"))`,
-                baseUrl
-              );
-
               const groups = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.splitwise.list_groups())",
+                `login = apis.splitwise.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.splitwise.show_groups(access_token=access_token))`,
                 baseUrl
               );
+              if (groups.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
               serviceData.data.groups = parseOutput(groups.output);
 
-              const friends = await executeCode(
+              const activity = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.splitwise.list_friends())",
+                `login = apis.splitwise.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.splitwise.show_activity(access_token=access_token))`,
                 baseUrl
               );
-              serviceData.data.friends = parseOutput(friends.output);
+              serviceData.data.activity = parseOutput(activity.output);
 
               const balances = await executeCode(
                 taskId,
                 cookie,
-                "print(apis.splitwise.get_balances())",
+                `login = apis.splitwise.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.splitwise.show_people_balance(access_token=access_token))`,
                 baseUrl
               );
               serviceData.data.balances = parseOutput(balances.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
 
           case "phone": {
-            // Phone doesn't need login
-            const contacts = await executeCode(
-              taskId,
-              cookie,
-              "print(apis.phone.show_contacts())",
-              baseUrl
-            );
-            serviceData.data.contacts = parseOutput(contacts.output);
+            const creds = getCredentialsForService(passwords || [], "phone", email);
+            if (creds) {
+              // Phone uses phone_number as username
+              const phoneNumber = (results.profile as { phone_number?: string })?.phone_number || "";
 
-            const callLog = await executeCode(
-              taskId,
-              cookie,
-              "print(apis.phone.show_call_log())",
-              baseUrl
-            );
-            serviceData.data.callLog = parseOutput(callLog.output);
+              const contacts = await executeCode(
+                taskId,
+                cookie,
+                `login = apis.phone.login(username="${phoneNumber}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.phone.search_contacts(access_token=access_token))`,
+                baseUrl
+              );
+              if (contacts.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
+              serviceData.data.contacts = parseOutput(contacts.output);
 
-            const sms = await executeCode(
-              taskId,
-              cookie,
-              "print(apis.phone.show_sms())",
-              baseUrl
-            );
-            serviceData.data.sms = parseOutput(sms.output);
+              const textMessages = await executeCode(
+                taskId,
+                cookie,
+                `login = apis.phone.login(username="${phoneNumber}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.phone.search_text_messages(access_token=access_token))`,
+                baseUrl
+              );
+              serviceData.data.textMessages = parseOutput(textMessages.output);
+
+              const voiceMessages = await executeCode(
+                taskId,
+                cookie,
+                `login = apis.phone.login(username="${phoneNumber}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.phone.search_voice_messages(access_token=access_token))`,
+                baseUrl
+              );
+              serviceData.data.voiceMessages = parseOutput(voiceMessages.output);
+            } else {
+              serviceData.error = "No credentials found";
+            }
             break;
           }
 
           case "file_system": {
             const creds = getCredentialsForService(passwords || [], "file_system", email);
             if (creds) {
-              // Login first
-              await executeCode(
-                taskId,
-                cookie,
-                `print(apis.file_system.login(username="${creds.username}", password="${creds.password}"))`,
-                baseUrl
-              );
-
               const files = await executeCode(
                 taskId,
                 cookie,
-                'print(apis.file_system.list_files(path="/"))',
+                `login = apis.file_system.login(username="${creds.username}", password="${creds.password}")
+access_token = login["access_token"]
+print(apis.file_system.show_directory(access_token=access_token, path="/"))`,
                 baseUrl
               );
-              serviceData.data.rootFiles = parseOutput(files.output);
+              if (files.output?.includes("Exception")) {
+                serviceData.error = "Login failed";
+                break;
+              }
+              serviceData.data.rootDirectory = parseOutput(files.output);
+            } else {
+              serviceData.error = "No credentials found";
             }
             break;
           }
